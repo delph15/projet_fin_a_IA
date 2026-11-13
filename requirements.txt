@@ -1,0 +1,30 @@
+# Génération des factures fictives
+fpdf2
+faker
+
+# Lecture PDF texte
+pdfplumber
+
+# OCR image
+pytesseract
+Pillow
+opencv-python-headless
+
+# API
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Base de données
+# sqlite3 est inclus dans la bibliothèque standard Python
+
+# Interface
+streamlit
+
+# Tests
+pytest
+pytest-cov
+
+# Utilitaires
+python-dotenv
+requests

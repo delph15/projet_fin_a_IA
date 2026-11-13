@@ -1,0 +1,37 @@
+# Environnement Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Variables d'environnement (secrets)
+.env
+
+# Base de données locale
+*.db
+*.sqlite
+*.sqlite3
+
+# Fichiers Tesseract temporaires
+*.tiff
+*.tif
+
+# Données générées (non versionnées)
+donnees/dev/
+donnees/test/
+donnees/verite_terrain/
+
+# Résultats d'évaluation (gros fichiers)
+evaluation/resultats/
+
+# Éditeurs et OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
