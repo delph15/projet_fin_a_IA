@@ -46,11 +46,12 @@ def normaliser_nombre(texte: str) -> Optional[float]:
     except ValueError:
         return None
 
-    # Heuristique : si la valeur est un entier > 1000 et semble etre des centimes
-    # (ex. OCR lit "119373" au lieu de "1193.73"), on divise par 100
-    if valeur == int(valeur) and valeur > 999:
+    # Heuristique centimes : uniquement si la chaine SOURCE n'avait aucun separateur
+    # decimal (virgule ou point). Ex. : OCR lit "119373" au lieu de "1193.73".
+    # On n'applique PAS l'heuristique sur "1000.00" (a un point) ou "1 000,00".
+    source_sans_separateur = "," not in texte and "." not in texte
+    if source_sans_separateur and valeur == int(valeur) and valeur > 999:
         valeur_cents = valeur / 100
-        # On accepte la division si le resultat a exactement 2 decimales
         if round(valeur_cents, 2) == valeur_cents:
             valeur = valeur_cents
 
