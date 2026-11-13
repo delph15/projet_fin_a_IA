@@ -1,0 +1,317 @@
+{
+  "name": "Traitement des factures",
+  "nodes": [
+    {
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Nouveau fichier dans entrant",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": {
+        "path": "/data/factures/entrant",
+        "events": ["add"],
+        "options": {}
+      }
+    },
+    {
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Lire le fichier",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [480, 300],
+      "parameters": {
+        "filePath": "={{ $json.path }}"
+      }
+    },
+    {
+      "id": "a1b2c3d4-0003-0003-0003-000000000003",
+      "name": "Envoyer a l API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [720, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/factures/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "fichier",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-0004-0004-0004-000000000004",
+      "name": "Routage par statut",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [960, 300],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.statut }}",
+                    "rightValue": "prete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "prete"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.statut }}",
+                    "rightValue": "a_verifier",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "a_verifier"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.statut }}",
+                    "rightValue": "doublon",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "doublon"
+            }
+          ]
+        },
+        "fallbackOutput": "extra"
+      }
+    },
+    {
+      "id": "a1b2c3d4-0005-0005-0005-000000000005",
+      "name": "Prete a valider",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1200, 120],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-001",
+              "name": "statut",
+              "value": "prete",
+              "type": "string"
+            },
+            {
+              "id": "assign-002",
+              "name": "message",
+              "value": "={{ 'Facture ' + $json.fichier + ' prete a valider (id=' + $json.id + ')' }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-003",
+              "name": "id_facture",
+              "value": "={{ $json.id }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1b2c3d4-0006-0006-0006-000000000006",
+      "name": "A verifier manuellement",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1200, 300],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-004",
+              "name": "statut",
+              "value": "a_verifier",
+              "type": "string"
+            },
+            {
+              "id": "assign-005",
+              "name": "message",
+              "value": "={{ 'ALERTE : Facture ' + $json.fichier + ' a verifier (divergence ou OCR faible)' }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-006",
+              "name": "id_facture",
+              "value": "={{ $json.id }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1b2c3d4-0007-0007-0007-000000000007",
+      "name": "Doublon detecte",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1200, 480],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-007",
+              "name": "statut",
+              "value": "doublon",
+              "type": "string"
+            },
+            {
+              "id": "assign-008",
+              "name": "message",
+              "value": "={{ 'DOUBLON : ' + $json.fichier + ' deja presente en base' }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-009",
+              "name": "id_facture",
+              "value": "={{ $json.id }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1b2c3d4-0008-0008-0008-000000000008",
+      "name": "Note : webhook alternatif",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 540],
+      "parameters": {
+        "content": "## Declencheur alternatif : Webhook\n\nPour appeler le workflow directement depuis un script ou Streamlit :\n\n1. Ajouter un noeud **Webhook** (methode POST, chemin `facture`)\n2. Le connecter a \"Lire le fichier\" ou directement a \"Envoyer a l API\"\n   en passant les donnees binaires dans le body.\n\nL URL sera : `http://localhost:5678/webhook/facture`\n\n## Volume Docker\n\nn8n monte `./donnees` en `/data/factures`.\nDeposer les fichiers dans `donnees/entrant/` pour declencher ce workflow.",
+        "height": 240,
+        "width": 400,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Nouveau fichier dans entrant": {
+      "main": [
+        [
+          {
+            "node": "Lire le fichier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire le fichier": {
+      "main": [
+        [
+          {
+            "node": "Envoyer a l API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envoyer a l API": {
+      "main": [
+        [
+          {
+            "node": "Routage par statut",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Routage par statut": {
+      "main": [
+        [
+          {
+            "node": "Prete a valider",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "A verifier manuellement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Doublon detecte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "projet-factures-m1"
+  }
+}
