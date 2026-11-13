@@ -22,6 +22,7 @@ env/
 donnees/dev/
 donnees/test/
 donnees/verite_terrain/
+donnees/entrant/
 
 # Résultats d'évaluation (gros fichiers)
 evaluation/resultats/
