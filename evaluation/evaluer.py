@@ -311,6 +311,9 @@ def executer_config(config: str) -> tuple[list[dict], dict]:
     vt_dict = charger_verite_terrain()
     fichiers = sorted(DOSSIER_TEST.iterdir())
     fichiers = [f for f in fichiers if f.suffix.lower() in (".pdf", ".png", ".jpg") and f.name != ".gitkeep"]
+    # Originaux en premier, doublons ensuite : la detection de doublon necessite
+    # que les originaux soient deja en base avant de traiter leurs copies.
+    fichiers = sorted(fichiers, key=lambda f: (1 if f.stem.startswith("doublon") else 0, f.name))
 
     # Base temporaire isolee pour le systeme complet
     if config == "complet":
