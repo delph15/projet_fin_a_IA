@@ -100,17 +100,31 @@ def evaluer_fichier_llm(chemin: Path) -> tuple[dict, float]:
 
 def evaluer_fichier_complet(chemin: Path, conn: sqlite3.Connection) -> tuple[dict, str, float]:
     """
-    Config 'systeme complet' : OCR + regex + LLM + fusion + controles.
+    Config 'systeme complet' : OCR + regex + LLM + fusion + controles + insertion DB.
+    L'insertion est necessaire pour que la detection de doublons fonctionne
+    sur les fichiers suivants (l'original doit etre en base avant son doublon).
     Retourne (valeurs extraites, statut, duree).
     """
+    import base as base_mod
+
     debut = time.perf_counter()
     texte, conf_ocr = extraire_texte(chemin)
     res_regex = extraire_par_regex(texte)
     res_llm   = extraire_par_llm(texte)
     fusionne  = fusionner(res_regex, res_llm, conf_ocr)
     ctrl      = appliquer_controles(fusionne, chemin, conn)
-    duree     = time.perf_counter() - debut
 
+    # Insertion en base pour que les doublons suivants soient detectables
+    facture = {
+        "fichier":   chemin.name,
+        "empreinte": ctrl["empreinte"],
+        "statut":    ctrl["statut"],
+        "champs":    fusionne,
+        "controles": ctrl["controles"],
+    }
+    base_mod.inserer_facture(conn, facture)
+
+    duree   = time.perf_counter() - debut
     valeurs = {c: fusionne[c]["valeur"] for c in CHAMPS}
     return valeurs, ctrl["statut"], duree
 
