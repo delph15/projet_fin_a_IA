@@ -83,22 +83,19 @@ def generer_champs(fake: Faker, rng: random.Random, index: int) -> dict:
 
 def degrader_en_image(chemin_pdf: Path, chemin_image: Path, rng: random.Random) -> None:
     """
-    Convertit la première page du PDF en PNG dégradé :
-    flou léger, rotation aléatoire (±3°), réduction de résolution.
-    Nécessite pdf2image (poppler) ou une alternative ; ici on simule
-    la dégradation directement sur une image blanche avec le texte,
-    car poppler n'est pas requis dans l'environnement.
-
-    En pratique : on ouvre le PDF comme image avec Pillow si possible,
-    sinon on crée une image synthétique dégradée.
+    Convertit la première page du PDF en PNG dégradé via PyMuPDF (fitz).
+    PyMuPDF fonctionne sur Windows sans Poppler.
+    Dégradations appliquées : flou, rotation légère (±3°), réduction de résolution.
     """
-    try:
-        from pdf2image import convert_from_path
-        pages = convert_from_path(str(chemin_pdf), dpi=150)
-        img = pages[0]
-    except Exception:
-        # Fallback : image blanche (le contenu OCR sera vide, cas a_verifier)
-        img = Image.new("RGB", (794, 1123), color=(255, 255, 255))
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(str(chemin_pdf))
+    page = doc[0]
+    # Rendu à 150 dpi (facteur 150/72 ≈ 2.08)
+    mat = fitz.Matrix(150 / 72, 150 / 72)
+    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    doc.close()
 
     # Flou
     img = img.filter(ImageFilter.GaussianBlur(radius=rng.uniform(0.5, 1.2)))

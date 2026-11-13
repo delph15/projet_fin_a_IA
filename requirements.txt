@@ -1,6 +1,7 @@
 # Génération des factures fictives
 fpdf2
 faker
+pymupdf
 
 # Lecture PDF texte
 pdfplumber
