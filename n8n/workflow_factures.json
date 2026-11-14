@@ -3,13 +3,14 @@
   "nodes": [
     {
       "id": "a1b2c3d4-0001-0001-0001-000000000001",
-      "name": "Nouveau fichier dans entrant",
-      "type": "n8n-nodes-base.localFileTrigger",
-      "typeVersion": 1,
+      "name": "Webhook entrant",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
       "position": [240, 300],
       "parameters": {
-        "path": "/data/factures/entrant",
-        "events": ["add"],
+        "httpMethod": "POST",
+        "path": "facture",
+        "responseMode": "responseNode",
         "options": {}
       }
     },
@@ -20,7 +21,7 @@
       "typeVersion": 1,
       "position": [480, 300],
       "parameters": {
-        "filePath": "={{ $json.path }}"
+        "filePath": "={{ $json.body?.chemin ?? $json.chemin }}"
       }
     },
     {
@@ -65,19 +66,12 @@
           "values": [
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": false,
-                  "leftValue": "",
-                  "typeValidation": "strict"
-                },
+                "options": { "caseSensitive": false, "typeValidation": "strict" },
                 "conditions": [
                   {
                     "leftValue": "={{ $json.statut }}",
                     "rightValue": "prete",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    }
+                    "operator": { "type": "string", "operation": "equals" }
                   }
                 ],
                 "combinator": "and"
@@ -87,19 +81,12 @@
             },
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": false,
-                  "leftValue": "",
-                  "typeValidation": "strict"
-                },
+                "options": { "caseSensitive": false, "typeValidation": "strict" },
                 "conditions": [
                   {
                     "leftValue": "={{ $json.statut }}",
                     "rightValue": "a_verifier",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    }
+                    "operator": { "type": "string", "operation": "equals" }
                   }
                 ],
                 "combinator": "and"
@@ -109,19 +96,12 @@
             },
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": false,
-                  "leftValue": "",
-                  "typeValidation": "strict"
-                },
+                "options": { "caseSensitive": false, "typeValidation": "strict" },
                 "conditions": [
                   {
                     "leftValue": "={{ $json.statut }}",
                     "rightValue": "doublon",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    }
+                    "operator": { "type": "string", "operation": "equals" }
                   }
                 ],
                 "combinator": "and"
@@ -144,24 +124,9 @@
         "mode": "manual",
         "assignments": {
           "assignments": [
-            {
-              "id": "assign-001",
-              "name": "statut",
-              "value": "prete",
-              "type": "string"
-            },
-            {
-              "id": "assign-002",
-              "name": "message",
-              "value": "={{ 'Facture ' + $json.fichier + ' prete a valider (id=' + $json.id + ')' }}",
-              "type": "string"
-            },
-            {
-              "id": "assign-003",
-              "name": "id_facture",
-              "value": "={{ $json.id }}",
-              "type": "number"
-            }
+            { "id": "a1", "name": "statut",     "value": "prete",   "type": "string" },
+            { "id": "a2", "name": "message",    "value": "={{ 'Facture ' + $('Envoyer a l API').item.json.fichier + ' prete (id=' + $('Envoyer a l API').item.json.id + ')' }}", "type": "string" },
+            { "id": "a3", "name": "id_facture", "value": "={{ $('Envoyer a l API').item.json.id }}", "type": "number" }
           ]
         },
         "options": {}
@@ -177,24 +142,9 @@
         "mode": "manual",
         "assignments": {
           "assignments": [
-            {
-              "id": "assign-004",
-              "name": "statut",
-              "value": "a_verifier",
-              "type": "string"
-            },
-            {
-              "id": "assign-005",
-              "name": "message",
-              "value": "={{ 'ALERTE : Facture ' + $json.fichier + ' a verifier (divergence ou OCR faible)' }}",
-              "type": "string"
-            },
-            {
-              "id": "assign-006",
-              "name": "id_facture",
-              "value": "={{ $json.id }}",
-              "type": "number"
-            }
+            { "id": "b1", "name": "statut",     "value": "a_verifier", "type": "string" },
+            { "id": "b2", "name": "message",    "value": "={{ 'ALERTE : Facture ' + $('Envoyer a l API').item.json.fichier + ' a verifier' }}", "type": "string" },
+            { "id": "b3", "name": "id_facture", "value": "={{ $('Envoyer a l API').item.json.id }}", "type": "number" }
           ]
         },
         "options": {}
@@ -210,108 +160,86 @@
         "mode": "manual",
         "assignments": {
           "assignments": [
-            {
-              "id": "assign-007",
-              "name": "statut",
-              "value": "doublon",
-              "type": "string"
-            },
-            {
-              "id": "assign-008",
-              "name": "message",
-              "value": "={{ 'DOUBLON : ' + $json.fichier + ' deja presente en base' }}",
-              "type": "string"
-            },
-            {
-              "id": "assign-009",
-              "name": "id_facture",
-              "value": "={{ $json.id }}",
-              "type": "number"
-            }
+            { "id": "c1", "name": "statut",     "value": "doublon", "type": "string" },
+            { "id": "c2", "name": "message",    "value": "={{ 'DOUBLON : ' + $('Envoyer a l API').item.json.fichier + ' deja en base' }}", "type": "string" },
+            { "id": "c3", "name": "id_facture", "value": "={{ $('Envoyer a l API').item.json.id }}", "type": "number" }
           ]
         },
         "options": {}
       }
     },
     {
+      "id": "a1b2c3d4-0009-0009-0009-000000000009",
+      "name": "Repondre prete",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1440, 120],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Envoyer a l API').item.json) }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "a1b2c3d4-0010-0010-0010-000000000010",
+      "name": "Repondre a verifier",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1440, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Envoyer a l API').item.json) }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "a1b2c3d4-0011-0011-0011-000000000011",
+      "name": "Repondre doublon",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1440, 480],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Envoyer a l API').item.json) }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
       "id": "a1b2c3d4-0008-0008-0008-000000000008",
-      "name": "Note : webhook alternatif",
+      "name": "Note architecture",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [240, 540],
       "parameters": {
-        "content": "## Declencheur alternatif : Webhook\n\nPour appeler le workflow directement depuis un script ou Streamlit :\n\n1. Ajouter un noeud **Webhook** (methode POST, chemin `facture`)\n2. Le connecter a \"Lire le fichier\" ou directement a \"Envoyer a l API\"\n   en passant les donnees binaires dans le body.\n\nL URL sera : `http://localhost:5678/webhook/facture`\n\n## Volume Docker\n\nn8n monte `./donnees` en `/data/factures`.\nDeposer les fichiers dans `donnees/entrant/` pour declencher ce workflow.",
-        "height": 240,
-        "width": 400,
+        "content": "## Chemin unique de traitement\n\n1. Streamlit sauvegarde le fichier dans donnees/entrant/\n2. Streamlit POST JSON {filename, chemin} ici\n3. n8n lit le fichier depuis /data/factures/entrant/\n4. n8n envoie a l'API FastAPI en multipart\n5. n8n retourne le JSON de result a Streamlit\n\n**URL test**       : http://localhost:5678/webhook-test/facture\n**URL production** : http://localhost:5678/webhook/facture",
+        "height": 200,
+        "width": 440,
         "color": 5
       }
     }
   ],
   "connections": {
-    "Nouveau fichier dans entrant": {
-      "main": [
-        [
-          {
-            "node": "Lire le fichier",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Webhook entrant": {
+      "main": [[{ "node": "Lire le fichier", "type": "main", "index": 0 }]]
     },
     "Lire le fichier": {
-      "main": [
-        [
-          {
-            "node": "Envoyer a l API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Envoyer a l API", "type": "main", "index": 0 }]]
     },
     "Envoyer a l API": {
-      "main": [
-        [
-          {
-            "node": "Routage par statut",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Routage par statut", "type": "main", "index": 0 }]]
     },
     "Routage par statut": {
       "main": [
-        [
-          {
-            "node": "Prete a valider",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "A verifier manuellement",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Doublon detecte",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Prete a valider",         "type": "main", "index": 0 }],
+        [{ "node": "A verifier manuellement",  "type": "main", "index": 0 }],
+        [{ "node": "Doublon detecte",          "type": "main", "index": 0 }]
       ]
-    }
+    },
+    "Prete a valider":         { "main": [[{ "node": "Repondre prete",      "type": "main", "index": 0 }]] },
+    "A verifier manuellement": { "main": [[{ "node": "Repondre a verifier", "type": "main", "index": 0 }]] },
+    "Doublon detecte":         { "main": [[{ "node": "Repondre doublon",    "type": "main", "index": 0 }]] }
   },
   "active": false,
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "meta": {
-    "instanceId": "projet-factures-m1"
-  }
+  "settings": { "executionOrder": "v1" },
+  "meta": { "instanceId": "projet-factures-m1" }
 }

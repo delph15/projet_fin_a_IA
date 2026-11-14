@@ -66,11 +66,19 @@ def initialiser_base(conn: sqlite3.Connection) -> None:
             conf_ocr         REAL,
             nb_divergences   INTEGER,
 
+            -- Fichier original conserve
+            chemin_original  TEXT,
+
             -- Horodatage
             cree_le          TEXT DEFAULT (datetime('now')),
             mis_a_jour_le    TEXT DEFAULT (datetime('now'))
         )
     """)
+    # Migration : ajouter chemin_original si la base existait avant
+    try:
+        conn.execute("ALTER TABLE factures ADD COLUMN chemin_original TEXT")
+    except Exception:
+        pass
     conn.commit()
 
 
@@ -101,14 +109,14 @@ def inserer_facture(conn: sqlite3.Connection, facture: dict) -> int:
 
     cur = conn.execute("""
         INSERT INTO factures (
-            fichier, empreinte, statut,
+            fichier, empreinte, statut, chemin_original,
             fournisseur, numero_facture, date, montant_ht, tva, montant_ttc,
             conf_fournisseur, conf_numero, conf_date, conf_ht, conf_tva, conf_ttc,
             src_fournisseur, src_numero, src_date, src_ht, src_tva, src_ttc,
             ctrl_arithmetique, ctrl_date_valide, ctrl_doublon,
             conf_ocr, nb_divergences
         ) VALUES (
-            ?, ?, ?,
+            ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
@@ -117,6 +125,7 @@ def inserer_facture(conn: sqlite3.Connection, facture: dict) -> int:
         )
     """, (
         facture.get("fichier"), facture.get("empreinte"), facture.get("statut"),
+        facture.get("chemin_original"),
         v("fournisseur"), v("numero_facture"), v("date"),
         v("montant_ht"), v("tva"), v("montant_ttc"),
         c("fournisseur"), c("numero_facture"), c("date"),
@@ -160,6 +169,48 @@ def obtenir_facture(conn: sqlite3.Connection, id_facture: int) -> Optional[dict]
         "SELECT * FROM factures WHERE id = ?", (id_facture,)
     ).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Correction manuelle des champs (action humaine)
+# ---------------------------------------------------------------------------
+
+_COLONNES_CHAMPS = {
+    "fournisseur":    ("fournisseur",    "conf_fournisseur", "src_fournisseur"),
+    "numero_facture": ("numero_facture", "conf_numero",      "src_numero"),
+    "date":           ("date",           "conf_date",        "src_date"),
+    "montant_ht":     ("montant_ht",     "conf_ht",          "src_ht"),
+    "tva":            ("tva",            "conf_tva",         "src_tva"),
+    "montant_ttc":    ("montant_ttc",    "conf_ttc",         "src_ttc"),
+}
+
+
+def corriger_champs(
+    conn: sqlite3.Connection,
+    id_facture: int,
+    corrections: dict,
+) -> bool:
+    """
+    Applique les corrections humaines sur les champs d'une facture.
+    Chaque champ corrige recoit confiance=1.0 et source="humain".
+    Retourne True si au moins une ligne a ete modifiee.
+    """
+    sets, params = [], []
+    for champ, valeur in corrections.items():
+        if champ not in _COLONNES_CHAMPS:
+            continue
+        col_val, col_conf, col_src = _COLONNES_CHAMPS[champ]
+        sets  += [f"{col_val} = ?", f"{col_conf} = 1.0", f"{col_src} = 'humain'"]
+        params.append(valeur)
+
+    if not sets:
+        return False
+
+    params += [id_facture]
+    sql = f"UPDATE factures SET {', '.join(sets)}, mis_a_jour_le = datetime('now') WHERE id = ?"
+    cur = conn.execute(sql, params)
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # ---------------------------------------------------------------------------

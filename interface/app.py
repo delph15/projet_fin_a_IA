@@ -1,20 +1,23 @@
 # app.py - interface Streamlit de revue humaine des factures
 #
-# Lancement (depuis la racine du projet) :
+# Lancement :
 #   streamlit run interface/app.py
 #
-# Prerequis : l'API FastAPI doit etre demarree sur le port 8000.
+# Flux : upload → webhook n8n → API FastAPI → SQLite
+# Streamlit lit et valide via l'API, ne traite jamais directement.
 
+import base64
 import os
+from pathlib import Path
 
 import requests
 import streamlit as st
+from dotenv import load_dotenv
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+load_dotenv()
 
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+API_URL         = os.getenv("API_URL",         "http://127.0.0.1:8000")
+N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/facture")
 
 st.set_page_config(
     page_title="Traitement des factures",
@@ -37,12 +40,7 @@ COULEUR_STATUT = {
 }
 
 
-def badge_statut(statut: str) -> str:
-    couleur, libelle = COULEUR_STATUT.get(statut, ("#888888", statut))
-    return f'<span style="background:{couleur};color:white;padding:2px 10px;border-radius:12px;font-size:0.85em">{libelle}</span>'
-
-
-def couleur_confiance(conf: float) -> str:
+def couleur_confiance(conf) -> str:
     if conf is None:
         return "#888888"
     if conf >= 0.90:
@@ -50,13 +48,6 @@ def couleur_confiance(conf: float) -> str:
     if conf >= 0.70:
         return "#e67e22"
     return "#e74c3c"
-
-
-def afficher_confiance(conf) -> str:
-    if conf is None:
-        return "—"
-    couleur = couleur_confiance(conf)
-    return f'<span style="color:{couleur};font-weight:bold">{conf:.2f}</span>'
 
 
 def icone_bool(valeur: bool) -> str:
@@ -88,12 +79,57 @@ def get_facture(id_facture: int) -> dict | None:
 
 
 def action_facture(id_facture: int, action: str) -> bool:
-    """action : 'valider' ou 'rejeter'"""
     try:
         r = requests.put(f"{API_URL}/factures/{id_facture}/{action}", timeout=5)
         return r.status_code == 200
     except Exception:
         return False
+
+
+def corriger_facture(id_facture: int, corrections: dict) -> bool:
+    try:
+        r = requests.put(
+            f"{API_URL}/factures/{id_facture}/corriger",
+            json=corrections,
+            timeout=5,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def get_fichier(id_facture: int) -> bytes | None:
+    try:
+        r = requests.get(f"{API_URL}/factures/{id_facture}/fichier", timeout=10)
+        if r.status_code == 200:
+            return r.content
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Affichage du fichier original (image ou PDF)
+# ---------------------------------------------------------------------------
+
+def afficher_fichier_original(id_facture: int, nom_fichier: str) -> None:
+    contenu = get_fichier(id_facture)
+    if contenu is None:
+        st.caption("Fichier original non disponible.")
+        return
+
+    ext = Path(nom_fichier).suffix.lower()
+    if ext in (".png", ".jpg", ".jpeg", ".tiff", ".tif"):
+        st.image(contenu, caption=nom_fichier, use_container_width=True)
+    elif ext == ".pdf":
+        b64 = base64.b64encode(contenu).decode()
+        st.markdown(
+            f'<iframe src="data:application/pdf;base64,{b64}" '
+            f'width="100%" height="500px" style="border:none;border-radius:4px"></iframe>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.download_button("Télécharger le fichier", contenu, file_name=nom_fichier)
 
 
 # ---------------------------------------------------------------------------
@@ -102,81 +138,113 @@ def action_facture(id_facture: int, action: str) -> bool:
 
 CHAMPS_LABELS = {
     "fournisseur":    "Fournisseur",
-    "numero_facture": "Numero de facture",
+    "numero_facture": "Numéro de facture",
     "date":           "Date",
     "montant_ht":     "Montant HT",
     "tva":            "TVA",
     "montant_ttc":    "Montant TTC",
 }
 
-COLS_CHAMPS = [
-    "fournisseur", "numero_facture", "date",
-    "montant_ht", "tva", "montant_ttc",
-]
-
-COLS_CONF = [
-    "conf_fournisseur", "conf_numero", "conf_date",
-    "conf_ht", "conf_tva", "conf_ttc",
-]
-
-COLS_SRC = [
-    "src_fournisseur", "src_numero", "src_date",
-    "src_ht", "src_tva", "src_ttc",
-]
+COLS_CHAMPS = ["fournisseur", "numero_facture", "date", "montant_ht", "tva", "montant_ttc"]
+COLS_CONF   = ["conf_fournisseur", "conf_numero", "conf_date", "conf_ht", "conf_tva", "conf_ttc"]
+COLS_SRC    = ["src_fournisseur",  "src_numero",  "src_date",  "src_ht",  "src_tva",  "src_ttc"]
 
 
-def afficher_detail(f: dict, dans_expander: bool = False) -> None:
-    """Affiche les champs, confiances, controles et boutons d'action."""
+def afficher_detail(f: dict) -> None:
+    statut     = f.get("statut", "")
+    id_facture = f["id"]
+    nom        = f.get("fichier", "")
 
-    col1, col2 = st.columns([2, 1])
+    # Pour a_verifier : image a gauche, champs a droite
+    if statut == "a_verifier":
+        col_img, col_champs = st.columns([1, 1])
+        with col_img:
+            st.markdown("**Document original**")
+            afficher_fichier_original(id_facture, nom)
+    else:
+        col_champs = st.container()
 
-    with col1:
-        st.markdown("**Champs extraits**")
-        lignes = []
-        for champ, conf_col, src_col in zip(COLS_CHAMPS, COLS_CONF, COLS_SRC):
-            valeur = f.get(champ, "—") or "—"
-            conf   = f.get(conf_col)
-            src    = f.get(src_col, "")
-            lignes.append({
-                "Champ":    CHAMPS_LABELS[champ],
-                "Valeur":   str(valeur),
-                "Confiance": f"{conf:.2f}" if conf is not None else "—",
-                "Source":   src or "—",
-            })
-        st.table(lignes)
+    with col_champs:
+        col1, col2 = st.columns([2, 1])
 
-    with col2:
-        st.markdown("**Controles metier**")
-        st.write(f"Arithmetique  : {icone_bool(bool(f.get('ctrl_arithmetique')))}")
-        st.write(f"Date valide   : {icone_bool(bool(f.get('ctrl_date_valide')))}")
-        st.write(f"Doublon       : {'OUI' if f.get('ctrl_doublon') else 'non'}")
-        st.markdown("---")
-        st.write(f"Confiance OCR : **{f.get('conf_ocr', 0):.2f}**")
-        st.write(f"Divergences   : {f.get('nb_divergences', 0)}")
+        with col1:
+            st.markdown("**Champs extraits**")
+            lignes = []
+            for champ, conf_col, src_col in zip(COLS_CHAMPS, COLS_CONF, COLS_SRC):
+                valeur = f.get(champ, "—") or "—"
+                conf   = f.get(conf_col)
+                src    = f.get(src_col, "")
+                couleur = couleur_confiance(conf)
+                lignes.append({
+                    "Champ":     CHAMPS_LABELS[champ],
+                    "Valeur":    str(valeur),
+                    "Confiance": f"{conf:.2f}" if conf is not None else "—",
+                    "Source":    src or "—",
+                })
+            st.table(lignes)
 
-    # Boutons d'action (uniquement si la facture n'est pas finalisee)
-    statut = f.get("statut", "")
-    if statut in ("prete", "a_verifier"):
-        st.markdown("---")
-        c1, c2, _ = st.columns([1, 1, 3])
-        with c1:
-            if st.button("Valider", key=f"val_{f['id']}", type="primary"):
-                if action_facture(f["id"], "valider"):
-                    st.success("Facture validee.")
-                    st.rerun()
-                else:
-                    st.error("Echec de la validation.")
-        with c2:
-            if st.button("Rejeter", key=f"rej_{f['id']}"):
-                if action_facture(f["id"], "rejeter"):
-                    st.warning("Facture rejetee.")
-                    st.rerun()
-                else:
-                    st.error("Echec du rejet.")
+        with col2:
+            st.markdown("**Controles métier**")
+            st.write(f"Arithmétique : {icone_bool(bool(f.get('ctrl_arithmetique')))}")
+            st.write(f"Date valide  : {icone_bool(bool(f.get('ctrl_date_valide')))}")
+            st.write(f"Doublon      : {'OUI' if f.get('ctrl_doublon') else 'non'}")
+            st.markdown("---")
+            st.write(f"Confiance OCR : **{f.get('conf_ocr', 0):.2f}**")
+            st.write(f"Divergences   : {f.get('nb_divergences', 0)}")
+
+        # Formulaire de correction (uniquement pour a_verifier)
+        if statut == "a_verifier":
+            with st.expander("Corriger un champ avant validation"):
+                with st.form(key=f"form_corr_{id_facture}"):
+                    champ_a_corriger = st.selectbox(
+                        "Champ à corriger",
+                        options=COLS_CHAMPS,
+                        format_func=lambda c: CHAMPS_LABELS[c],
+                        key=f"sel_{id_facture}",
+                    )
+                    valeur_actuelle = f.get(champ_a_corriger, "")
+                    nouvelle_valeur = st.text_input(
+                        "Nouvelle valeur",
+                        value=str(valeur_actuelle) if valeur_actuelle else "",
+                        key=f"val_{id_facture}",
+                    )
+                    if st.form_submit_button("Appliquer la correction"):
+                        # Conversion numérique si nécessaire
+                        val_finale = nouvelle_valeur
+                        if champ_a_corriger in ("montant_ht", "tva", "montant_ttc"):
+                            try:
+                                val_finale = float(nouvelle_valeur.replace(",", "."))
+                            except ValueError:
+                                st.error("Valeur numérique invalide.")
+                                st.stop()
+                        if corriger_facture(id_facture, {champ_a_corriger: val_finale}):
+                            st.success(f"{CHAMPS_LABELS[champ_a_corriger]} corrigé.")
+                            st.rerun()
+                        else:
+                            st.error("Échec de la correction.")
+
+        # Boutons Valider / Rejeter
+        if statut in ("prete", "a_verifier"):
+            st.markdown("---")
+            c1, c2, _ = st.columns([1, 1, 3])
+            with c1:
+                if st.button("Valider", key=f"btn_val_{id_facture}", type="primary"):
+                    if action_facture(id_facture, "valider"):
+                        st.success("Facture validée.")
+                        st.rerun()
+                    else:
+                        st.error("Échec de la validation.")
+            with c2:
+                if st.button("Rejeter", key=f"btn_rej_{id_facture}"):
+                    if action_facture(id_facture, "rejeter"):
+                        st.warning("Facture rejetée.")
+                        st.rerun()
+                    else:
+                        st.error("Échec du rejet.")
 
 
 # ---------------------------------------------------------------------------
-# Tableau de bord (compteurs par statut)
+# Tableau de bord
 # ---------------------------------------------------------------------------
 
 def afficher_tableau_de_bord(toutes: list[dict]) -> None:
@@ -186,7 +254,7 @@ def afficher_tableau_de_bord(toutes: list[dict]) -> None:
         compteurs[s] = compteurs.get(s, 0) + 1
 
     ordre = ["prete", "a_verifier", "validee", "rejetee", "doublon", "recue"]
-    cols = st.columns(len(ordre))
+    cols  = st.columns(len(ordre))
     for col, statut in zip(cols, ordre):
         n = compteurs.get(statut, 0)
         _, libelle = COULEUR_STATUT.get(statut, ("#888", statut))
@@ -194,41 +262,101 @@ def afficher_tableau_de_bord(toutes: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Page : file d'attente (prete + a_verifier)
+# Section upload
+# ---------------------------------------------------------------------------
+
+def section_upload() -> None:
+    st.markdown("### Déposer une facture")
+    st.caption(f"Le fichier est envoyé au webhook n8n → API FastAPI.")
+
+    fichier = st.file_uploader(
+        "Sélectionner un fichier PDF ou image",
+        type=["pdf", "png", "jpg", "jpeg"],
+        key="upload_facture",
+    )
+
+    if fichier is not None:
+        if st.button("Envoyer pour traitement", type="primary"):
+            with st.spinner("Envoi vers n8n en cours..."):
+                try:
+                    # 1. Sauvegarder le fichier dans donnees/entrant/ (accessible par Docker)
+                    entrant_dir = Path("donnees/entrant")
+                    entrant_dir.mkdir(parents=True, exist_ok=True)
+                    dest = entrant_dir / fichier.name
+                    dest.write_bytes(fichier.getvalue())
+
+                    # 2. Notifier n8n avec le chemin du fichier (JSON, pas binaire)
+                    r = requests.post(
+                        N8N_WEBHOOK_URL,
+                        json={
+                            "filename": fichier.name,
+                            "chemin":   f"/data/factures/entrant/{fichier.name}",
+                        },
+                        timeout=120,
+                    )
+                    if r.status_code in (200, 201):
+                        data = r.json()
+                        statut = data.get("statut", "?")
+                        _, libelle = COULEUR_STATUT.get(statut, ("#888", statut))
+                        st.success(f"Facture traitée — statut : **{libelle}**")
+                        st.rerun()
+                    else:
+                        st.error(f"Erreur n8n ({r.status_code}) : {r.text[:300]}")
+                except requests.exceptions.ConnectionError:
+                    st.error(
+                        "n8n inaccessible. Vérifiez que Docker tourne "
+                        f"(`docker compose up -d`) et que le workflow est actif.\n\n"
+                        f"URL configurée : `{N8N_WEBHOOK_URL}`"
+                    )
+                except Exception as e:
+                    st.error(f"Erreur : {e}")
+
+    st.markdown("---")
+
+
+# ---------------------------------------------------------------------------
+# Page : file d'attente
 # ---------------------------------------------------------------------------
 
 def page_file_attente() -> None:
-    st.header("File d'attente")
+    section_upload()
 
     prete      = get_factures("prete")
     a_verifier = get_factures("a_verifier")
     doublons   = get_factures("doublon")
 
     if not prete and not a_verifier and not doublons:
-        st.success("Aucune facture en attente.")
+        st.info("Aucune facture en attente.")
         return
 
-    # Factures pretes (confiance elevee, pas de divergence)
     if prete:
-        st.subheader(f"Pretes a valider ({len(prete)})")
+        st.subheader(f"Prêtes à valider ({len(prete)})")
         for f in prete:
-            with st.expander(f"[{f['id']}] {f.get('fichier','?')}  —  {f.get('fournisseur','?')}  |  {f.get('numero_facture','?')}  |  {f.get('date','?')}  |  TTC {f.get('montant_ttc','?')} EUR"):
+            with st.expander(
+                f"[{f['id']}] {f.get('fichier','?')}  —  "
+                f"{f.get('fournisseur','?')}  |  {f.get('numero_facture','?')}  |  "
+                f"{f.get('date','?')}  |  TTC {f.get('montant_ttc','?')} EUR"
+            ):
                 afficher_detail(f)
 
-    # Factures a verifier (divergence ou OCR faible)
     if a_verifier:
-        st.subheader(f"A verifier ({len(a_verifier)})")
-        st.caption("Ces factures presentent une divergence, un controle echoue ou une OCR de faible qualite.")
+        st.subheader(f"À vérifier ({len(a_verifier)})")
+        st.caption("Divergence, contrôle échoué ou OCR de faible qualité.")
         for f in a_verifier:
-            with st.expander(f"[{f['id']}] {f.get('fichier','?')}  —  {f.get('fournisseur','?')}  |  {f.get('numero_facture','?')}"):
+            with st.expander(
+                f"[{f['id']}] {f.get('fichier','?')}  —  "
+                f"{f.get('fournisseur','?')}  |  {f.get('numero_facture','?')}"
+            ):
                 afficher_detail(f)
 
-    # Doublons detectes
     if doublons:
-        st.subheader(f"Doublons detectes ({len(doublons)})")
-        st.caption("Ces factures ont ete refusees automatiquement (meme empreinte ou meme reference).")
+        st.subheader(f"Doublons détectés ({len(doublons)})")
+        st.caption("Refusés automatiquement (même empreinte ou même référence).")
         for f in doublons:
-            st.write(f"[{f['id']}] {f.get('fichier','?')} — {f.get('fournisseur','?')} / {f.get('numero_facture','?')}")
+            st.write(
+                f"[{f['id']}] {f.get('fichier','?')} — "
+                f"{f.get('fournisseur','?')} / {f.get('numero_facture','?')}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -239,27 +367,25 @@ def page_historique() -> None:
     st.header("Historique")
 
     statuts = ["(tous)", "validee", "rejetee", "prete", "a_verifier", "doublon", "recue"]
-    choix = st.selectbox("Filtrer par statut", statuts)
-    filtre = None if choix == "(tous)" else choix
+    choix   = st.selectbox("Filtrer par statut", statuts)
+    filtre  = None if choix == "(tous)" else choix
 
     factures = get_factures(filtre)
-
     if not factures:
-        st.info("Aucune facture trouvee.")
+        st.info("Aucune facture trouvée.")
         return
 
-    # Tableau recapitulatif
     lignes = []
     for f in factures:
         lignes.append({
-            "ID":        f["id"],
-            "Fichier":   f.get("fichier", ""),
-            "Statut":    f.get("statut", ""),
+            "ID":          f["id"],
+            "Fichier":     f.get("fichier", ""),
+            "Statut":      f.get("statut", ""),
             "Fournisseur": f.get("fournisseur", ""),
-            "Numero":    f.get("numero_facture", ""),
-            "Date":      f.get("date", ""),
-            "TTC (EUR)": f.get("montant_ttc", ""),
-            "Conf. OCR": f"{f.get('conf_ocr', 0):.2f}" if f.get("conf_ocr") is not None else "—",
+            "Numéro":      f.get("numero_facture", ""),
+            "Date":        f.get("date", ""),
+            "TTC (EUR)":   f.get("montant_ttc", ""),
+            "Conf. OCR":   f"{f.get('conf_ocr', 0):.2f}" if f.get("conf_ocr") is not None else "—",
         })
     st.dataframe(lignes, use_container_width=True)
 
@@ -269,7 +395,7 @@ def page_historique() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    st.title("Traitement automatise des factures")
+    st.title("Traitement automatisé des factures")
 
     toutes = get_factures()
     if toutes:

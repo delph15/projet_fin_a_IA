@@ -131,7 +131,21 @@ projet_fin_a_IA/
 
 Statuts : `recue`, `extraite`, `a_verifier`, `prete`, `validee`, `rejetee`, `doublon`.
 
-## 9. Règles métier (non négociables)
+## 9. Architecture — chemin unique de traitement (règle absolue)
+
+Streamlit envoie les fichiers **uniquement** au webhook n8n (`POST http://localhost:5678/webhook/facture`).
+n8n transmet à l'API FastAPI (`POST /factures/`), reçoit le JSON de résultat, route selon le statut,
+et renvoie la réponse JSON à Streamlit.
+
+Streamlit utilise l'API FastAPI directement **seulement** pour :
+- lire les factures (`GET /factures/`, `GET /factures/{id}`)
+- télécharger le fichier original (`GET /factures/{id}/fichier`)
+- corriger des champs (`PUT /factures/{id}/corriger`)
+- valider ou rejeter (`PUT /factures/{id}/valider`, `PUT /factures/{id}/rejeter`)
+
+**Ne jamais** faire appeler `POST /factures/` directement depuis Streamlit (cela court-circuiterait n8n).
+
+## 10. Règles métier (non négociables)
 
 - Aucune facture n'est `validee` sans action humaine.
 - Un champ absent reste `null` : ne jamais inventer une valeur. Vérifier que la valeur du LLM apparaît dans le texte OCR.
@@ -142,7 +156,7 @@ Statuts : `recue`, `extraite`, `a_verifier`, `prete`, `validee`, `rejetee`, `dou
 - Un OCR vide ou un LLM indisponible → statut `a_verifier`, jamais un plantage.
 - Aucune API payante, aucun mot de passe ni secret dans le dépôt (`.env` dans `.gitignore`, `.env.example` fourni).
 
-## 10. Calendrier imposé (5 phases)
+## 11. Calendrier imposé (5 phases)
 
 | Jours | Phase | Livrable |
 |---|---|---|
@@ -155,7 +169,7 @@ Statuts : `recue`, `extraite`, `a_verifier`, `prete`, `validee`, `rejetee`, `dou
 Ordre de développement prévu : OCR → extraction regex (méthode de référence) → extraction LLM
 + fusion + confiance → API + contrôles + SQLite → workflow n8n → interface Streamlit → intégration.
 
-## 11. Évaluation (pour le rapport)
+## 12. Évaluation (pour le rapport)
 
 Comparer 4 configurations sur le jeu de test : saisie manuelle (chronométrée, 10 factures),
 regex seules, LLM seul, système complet. Mesures : précision par champ, factures entièrement
@@ -163,7 +177,7 @@ correctes, rappel/précision des doublons, part des erreurs signalées, temps pa
 Analyses : PDF natifs vs images ; modèles A-B-C vs D ; 3B vs 7B.
 Noter les paramètres de reproduction : modèle, température, prompt, version de Tesseract, graine.
 
-## 12. État d'avancement
+## 13. État d'avancement
 
 - [x] Jour 0 : Python, Tesseract (fra), Ollama (CPU) et modèles validés
 - [ ] Jour 0 : Docker Desktop à démarrer et vérifier

@@ -4,20 +4,30 @@
 #   uvicorn api.main:app --reload --port 8000
 #
 # Endpoints :
-#   POST /factures/           soumettre un fichier (PDF ou image)
-#   GET  /factures/           lister toutes les factures (filtre ?statut=...)
-#   GET  /factures/{id}       detail d'une facture
-#   PUT  /factures/{id}/valider  action humaine : valider
-#   PUT  /factures/{id}/rejeter  action humaine : rejeter
+#   POST /factures/                soumettre un fichier (via n8n webhook)
+#   GET  /factures/                lister toutes les factures (?statut=...)
+#   GET  /factures/{id}            detail d'une facture
+#   GET  /factures/{id}/fichier    telecharger le fichier original
+#   PUT  /factures/{id}/corriger   corriger des champs (action humaine)
+#   PUT  /factures/{id}/valider    valider (action humaine)
+#   PUT  /factures/{id}/rejeter    rejeter (action humaine)
 
+import os
 import shutil
-import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
 
-from base import initialiser_base, inserer_facture, lister_factures, mettre_a_jour_statut, obtenir_connexion, obtenir_facture
+from base import (
+    corriger_champs,
+    initialiser_base,
+    inserer_facture,
+    lister_factures,
+    mettre_a_jour_statut,
+    obtenir_connexion,
+    obtenir_facture,
+)
 from controles import appliquer_controles
 from extraction import extraire_par_regex
 from extraction_llm import extraire_par_llm
@@ -27,58 +37,70 @@ from ocr import extraire_texte
 app = FastAPI(
     title="API Traitement de Factures",
     description="Pipeline OCR → extraction → controles → validation humaine",
-    version="0.1.0",
+    version="0.2.0",
 )
 
+# Dossier de conservation des fichiers originaux
+DOSSIER_ORIGINAUX = Path(os.getenv("DOSSIER_ORIGINAUX", "donnees/originaux"))
+
+
 # ---------------------------------------------------------------------------
-# Initialisation de la base au demarrage
+# Initialisation au demarrage
 # ---------------------------------------------------------------------------
 
 @app.on_event("startup")
 def demarrage():
+    DOSSIER_ORIGINAUX.mkdir(parents=True, exist_ok=True)
     conn = obtenir_connexion()
     initialiser_base(conn)
     conn.close()
 
 
 # ---------------------------------------------------------------------------
-# Utilitaire : assemblage du dict complet d'une facture
+# Utilitaire
 # ---------------------------------------------------------------------------
 
-def assembler_facture(nom_fichier: str, champs: dict, resultats_controles: dict) -> dict:
-    """Construit le dict pret a etre insere en base et retourne a l'appelant."""
+def assembler_facture(nom_fichier: str, chemin_original: str, champs: dict, resultats_controles: dict) -> dict:
     return {
-        "fichier":    nom_fichier,
-        "empreinte":  resultats_controles["empreinte"],
-        "statut":     resultats_controles["statut"],
-        "champs":     champs,
-        "controles":  resultats_controles["controles"],
+        "fichier":          nom_fichier,
+        "chemin_original":  chemin_original,
+        "empreinte":        resultats_controles["empreinte"],
+        "statut":           resultats_controles["statut"],
+        "champs":           champs,
+        "controles":        resultats_controles["controles"],
     }
 
 
 # ---------------------------------------------------------------------------
-# POST /factures/ - soumettre un fichier
+# POST /factures/ - soumettre un fichier (appele par n8n)
 # ---------------------------------------------------------------------------
 
 @app.post("/factures/", status_code=201)
 async def soumettre_facture(fichier: UploadFile = File(...)):
     """
     Recoit un fichier PDF ou image, applique le pipeline complet et
-    enregistre le resultat en base.
+    enregistre le resultat en base. Appele par le webhook n8n.
     """
     extensions_acceptees = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"}
     suffixe = Path(fichier.filename).suffix.lower()
     if suffixe not in extensions_acceptees:
         raise HTTPException(status_code=400, detail=f"Format non supporte : {suffixe}")
 
-    # Sauvegarde temporaire du fichier uploade
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffixe) as tmp:
-        shutil.copyfileobj(fichier.file, tmp)
-        chemin_tmp = Path(tmp.name)
+    # Sauvegarde permanente du fichier original
+    chemin_dest = DOSSIER_ORIGINAUX / fichier.filename
+    # Eviter les collisions de nom
+    compteur = 1
+    while chemin_dest.exists():
+        stem = Path(fichier.filename).stem
+        chemin_dest = DOSSIER_ORIGINAUX / f"{stem}_{compteur}{suffixe}"
+        compteur += 1
+
+    with open(chemin_dest, "wb") as f:
+        shutil.copyfileobj(fichier.file, f)
 
     try:
         # 1. OCR
-        texte, conf_ocr = extraire_texte(chemin_tmp)
+        texte, conf_ocr = extraire_texte(chemin_dest)
 
         # 2. Extraction
         res_regex = extraire_par_regex(texte)
@@ -90,21 +112,27 @@ async def soumettre_facture(fichier: UploadFile = File(...)):
         # 4. Controles metier + statut
         conn = obtenir_connexion()
         initialiser_base(conn)
-        resultats_ctrl = appliquer_controles(champs, chemin_tmp, conn)
+        resultats_ctrl = appliquer_controles(champs, chemin_dest, conn)
 
         # 5. Insertion en base
-        facture = assembler_facture(fichier.filename, champs, resultats_ctrl)
+        facture = assembler_facture(
+            fichier.filename,
+            str(chemin_dest),
+            champs,
+            resultats_ctrl,
+        )
         id_facture = inserer_facture(conn, facture)
         conn.close()
 
-    finally:
-        chemin_tmp.unlink(missing_ok=True)
+    except Exception as exc:
+        chemin_dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=str(exc))
 
     return {
-        "id":       id_facture,
-        "fichier":  fichier.filename,
-        "statut":   resultats_ctrl["statut"],
-        "champs":   {
+        "id":        id_facture,
+        "fichier":   fichier.filename,
+        "statut":    resultats_ctrl["statut"],
+        "champs":    {
             cle: {
                 "valeur":    champs[cle]["valeur"],
                 "confiance": champs[cle]["confiance"],
@@ -112,8 +140,8 @@ async def soumettre_facture(fichier: UploadFile = File(...)):
             }
             for cle in ("fournisseur", "numero_facture", "date", "montant_ht", "tva", "montant_ttc")
         },
-        "controles":  resultats_ctrl["controles"],
-        "meta":       champs.get("meta", {}),
+        "controles": resultats_ctrl["controles"],
+        "meta":      champs.get("meta", {}),
     }
 
 
@@ -122,8 +150,7 @@ async def soumettre_facture(fichier: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @app.get("/factures/")
-def lister(statut: str = Query(default=None, description="Filtrer par statut")):
-    """Retourne la liste des factures, avec filtre optionnel sur le statut."""
+def lister(statut: str = Query(default=None)):
     conn = obtenir_connexion()
     rows = lister_factures(conn, statut)
     conn.close()
@@ -136,7 +163,6 @@ def lister(statut: str = Query(default=None, description="Filtrer par statut")):
 
 @app.get("/factures/{id_facture}")
 def detail_facture(id_facture: int):
-    """Retourne le detail complet d'une facture."""
     conn = obtenir_connexion()
     facture = obtenir_facture(conn, id_facture)
     conn.close()
@@ -146,15 +172,50 @@ def detail_facture(id_facture: int):
 
 
 # ---------------------------------------------------------------------------
+# GET /factures/{id}/fichier - telecharger le fichier original
+# ---------------------------------------------------------------------------
+
+@app.get("/factures/{id_facture}/fichier")
+def telecharger_fichier(id_facture: int):
+    """Retourne le fichier original conserve sur disque."""
+    conn = obtenir_connexion()
+    facture = obtenir_facture(conn, id_facture)
+    conn.close()
+    if facture is None:
+        raise HTTPException(status_code=404, detail="Facture introuvable")
+
+    chemin = facture.get("chemin_original")
+    if not chemin or not Path(chemin).exists():
+        raise HTTPException(status_code=404, detail="Fichier original introuvable")
+
+    return FileResponse(chemin, filename=facture.get("fichier", Path(chemin).name))
+
+
+# ---------------------------------------------------------------------------
+# PUT /factures/{id}/corriger - correction humaine des champs
+# ---------------------------------------------------------------------------
+
+@app.put("/factures/{id_facture}/corriger")
+def corriger_facture(id_facture: int, corrections: dict):
+    """
+    Corrige un ou plusieurs champs extraits (action humaine).
+    Corps JSON : {"fournisseur": "...", "montant_ht": 1000.0, ...}
+    Les champs corriges passent en confiance 1.0 / source 'humain'.
+    """
+    conn = obtenir_connexion()
+    ok = corriger_champs(conn, id_facture, corrections)
+    conn.close()
+    if not ok:
+        raise HTTPException(status_code=400, detail="Correction impossible (id inconnu ou champs invalides)")
+    return {"id": id_facture, "corrections_appliquees": list(corrections.keys())}
+
+
+# ---------------------------------------------------------------------------
 # PUT /factures/{id}/valider et /rejeter - actions humaines
 # ---------------------------------------------------------------------------
 
 @app.put("/factures/{id_facture}/valider")
 def valider_facture(id_facture: int):
-    """
-    Valide une facture (action humaine obligatoire).
-    Impossible si deja validee ou rejetee.
-    """
     conn = obtenir_connexion()
     ok = mettre_a_jour_statut(conn, id_facture, "validee")
     conn.close()
@@ -165,7 +226,6 @@ def valider_facture(id_facture: int):
 
 @app.put("/factures/{id_facture}/rejeter")
 def rejeter_facture(id_facture: int):
-    """Rejette une facture (action humaine)."""
     conn = obtenir_connexion()
     ok = mettre_a_jour_statut(conn, id_facture, "rejetee")
     conn.close()
