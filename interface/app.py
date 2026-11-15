@@ -262,54 +262,121 @@ def afficher_tableau_de_bord(toutes: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section upload
+# Helpers d'envoi : n8n (chemin principal) et API directe (secours)
+# ---------------------------------------------------------------------------
+
+def envoyer_via_n8n(nom_fichier: str) -> tuple[str | None, str, str]:
+    """Envoie le chemin du fichier au webhook n8n.
+
+    Retourne (statut, source, message_erreur).
+    statut vaut None si n8n est inaccessible — déclenche le mode secours.
+    """
+    try:
+        r = requests.post(
+            N8N_WEBHOOK_URL,
+            json={
+                "filename": nom_fichier,
+                "chemin":   f"/data/factures/entrant/{nom_fichier}",
+            },
+            timeout=120,
+        )
+        if r.status_code in (200, 201):
+            data = r.json()
+            return data.get("statut", "?"), "n8n", ""
+        return None, "—", f"n8n a répondu {r.status_code} : {r.text[:200]}"
+    except requests.exceptions.ConnectionError:
+        return None, "—", ""   # n8n hors ligne → mode secours
+    except Exception as e:
+        return None, "—", str(e)
+
+
+def envoyer_via_api(nom_fichier: str, contenu: bytes) -> tuple[str | None, str, str]:
+    """Mode secours : envoi multipart direct à l'API FastAPI.
+
+    Utilisé uniquement si n8n est indisponible.
+    Retourne (statut, source, message_erreur).
+    """
+    try:
+        r = requests.post(
+            f"{API_URL}/factures/",
+            files={"fichier": (nom_fichier, contenu)},
+            timeout=120,
+        )
+        if r.status_code in (200, 201):
+            data = r.json()
+            return data.get("statut", "?"), "api_direct", ""
+        return "erreur", "api_direct", f"Erreur API ({r.status_code}) : {r.text[:200]}"
+    except Exception as e:
+        return "erreur", "api_direct", str(e)
+
+
+# ---------------------------------------------------------------------------
+# Section upload (jusqu'à 10 fichiers, barre de progression, mode secours)
 # ---------------------------------------------------------------------------
 
 def section_upload() -> None:
-    st.markdown("### Déposer une facture")
-    st.caption(f"Le fichier est envoyé au webhook n8n → API FastAPI.")
-
-    fichier = st.file_uploader(
-        "Sélectionner un fichier PDF ou image",
-        type=["pdf", "png", "jpg", "jpeg"],
-        key="upload_facture",
+    st.markdown("### Déposer des factures")
+    st.caption(
+        "Jusqu'à 10 fichiers PDF ou images. "
+        "Chaque fichier est envoyé au webhook n8n — "
+        "si n8n est indisponible, le traitement passe directement par l'API."
     )
 
-    if fichier is not None:
-        if st.button("Envoyer pour traitement", type="primary"):
-            with st.spinner("Envoi vers n8n en cours..."):
-                try:
-                    # 1. Sauvegarder le fichier dans donnees/entrant/ (accessible par Docker)
-                    entrant_dir = Path("donnees/entrant")
-                    entrant_dir.mkdir(parents=True, exist_ok=True)
-                    dest = entrant_dir / fichier.name
-                    dest.write_bytes(fichier.getvalue())
+    fichiers = st.file_uploader(
+        "Sélectionner des fichiers PDF ou images",
+        type=["pdf", "png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="upload_factures",
+    )
 
-                    # 2. Notifier n8n avec le chemin du fichier (JSON, pas binaire)
-                    r = requests.post(
-                        N8N_WEBHOOK_URL,
-                        json={
-                            "filename": fichier.name,
-                            "chemin":   f"/data/factures/entrant/{fichier.name}",
-                        },
-                        timeout=120,
-                    )
-                    if r.status_code in (200, 201):
-                        data = r.json()
-                        statut = data.get("statut", "?")
-                        _, libelle = COULEUR_STATUT.get(statut, ("#888", statut))
-                        st.success(f"Facture traitée — statut : **{libelle}**")
-                        st.rerun()
-                    else:
-                        st.error(f"Erreur n8n ({r.status_code}) : {r.text[:300]}")
-                except requests.exceptions.ConnectionError:
-                    st.error(
-                        "n8n inaccessible. Vérifiez que Docker tourne "
-                        f"(`docker compose up -d`) et que le workflow est actif.\n\n"
-                        f"URL configurée : `{N8N_WEBHOOK_URL}`"
-                    )
-                except Exception as e:
-                    st.error(f"Erreur : {e}")
+    if fichiers:
+        if len(fichiers) > 10:
+            st.warning(f"{len(fichiers)} fichiers sélectionnés — seuls les 10 premiers seront traités.")
+            fichiers = fichiers[:10]
+
+        st.caption(f"{len(fichiers)} fichier(s) sélectionné(s).")
+
+        if st.button("Envoyer pour traitement", type="primary"):
+            entrant_dir = Path("donnees/entrant")
+            entrant_dir.mkdir(parents=True, exist_ok=True)
+
+            barre     = st.progress(0, text="Préparation...")
+            resultats = []
+
+            for i, fichier in enumerate(fichiers):
+                barre.progress(i / len(fichiers), text=f"Envoi {i + 1}/{len(fichiers)} : {fichier.name}")
+
+                contenu = fichier.getvalue()
+                (entrant_dir / fichier.name).write_bytes(contenu)
+
+                statut, source, erreur = envoyer_via_n8n(fichier.name)
+                if statut is None:
+                    statut, source, erreur = envoyer_via_api(fichier.name, contenu)
+
+                resultats.append({
+                    "fichier": fichier.name,
+                    "statut":  statut or "erreur",
+                    "source":  source,
+                    "erreur":  erreur,
+                })
+
+            barre.progress(1.0, text=f"Terminé — {len(resultats)} fichier(s) traité(s).")
+
+            nb_ok  = sum(1 for r in resultats if not r["erreur"])
+            nb_err = len(resultats) - nb_ok
+            st.write(f"**{nb_ok} réussi(s), {nb_err} erreur(s)**")
+
+            for r in resultats:
+                _, libelle = COULEUR_STATUT.get(r["statut"], ("#888", r["statut"]))
+                if r["erreur"]:
+                    st.error(f"{r['fichier']} — {r['erreur']}")
+                elif r["source"] == "api_direct":
+                    st.warning(f"{r['fichier']} — {libelle}  (n8n indisponible, traitement direct)")
+                else:
+                    st.success(f"{r['fichier']} — {libelle}")
+
+            if nb_ok > 0:
+                st.rerun()
 
     st.markdown("---")
 

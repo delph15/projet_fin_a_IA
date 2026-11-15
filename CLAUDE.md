@@ -131,7 +131,20 @@ projet_fin_a_IA/
 
 Statuts : `recue`, `extraite`, `a_verifier`, `prete`, `validee`, `rejetee`, `doublon`.
 
-## 9. Architecture — chemin unique de traitement (règle absolue)
+## 9. Upload multiple et mode secours
+
+`section_upload()` accepte jusqu'à **10 fichiers** (`accept_multiple_files=True`).
+Chaque fichier est traité séquentiellement avec une barre de progression.
+
+Deux helpers gèrent l'envoi :
+- `envoyer_via_n8n(nom_fichier)` → chemin principal (webhook n8n, réponse synchrone)
+- `envoyer_via_api(nom_fichier, contenu)` → **mode secours**, appelé uniquement si n8n renvoie
+  une `ConnectionError` ou `None` comme statut (n8n hors ligne ou non démarré)
+
+Le mode secours appelle `POST /factures/` directement — exception explicite à la règle ci-dessous,
+autorisée uniquement quand n8n est indisponible.
+
+## 10. Architecture — chemin unique de traitement (règle absolue)
 
 Streamlit envoie les fichiers **uniquement** au webhook n8n (`POST http://localhost:5678/webhook/facture`).
 n8n transmet à l'API FastAPI (`POST /factures/`), reçoit le JSON de résultat, route selon le statut,
@@ -145,7 +158,7 @@ Streamlit utilise l'API FastAPI directement **seulement** pour :
 
 **Ne jamais** faire appeler `POST /factures/` directement depuis Streamlit (cela court-circuiterait n8n).
 
-## 10. Règles métier (non négociables)
+## 11. Règles métier (non négociables)
 
 - Aucune facture n'est `validee` sans action humaine.
 - Un champ absent reste `null` : ne jamais inventer une valeur. Vérifier que la valeur du LLM apparaît dans le texte OCR.
@@ -156,7 +169,7 @@ Streamlit utilise l'API FastAPI directement **seulement** pour :
 - Un OCR vide ou un LLM indisponible → statut `a_verifier`, jamais un plantage.
 - Aucune API payante, aucun mot de passe ni secret dans le dépôt (`.env` dans `.gitignore`, `.env.example` fourni).
 
-## 11. Calendrier imposé (5 phases)
+## 12. Calendrier imposé (5 phases)
 
 | Jours | Phase | Livrable |
 |---|---|---|
@@ -169,7 +182,7 @@ Streamlit utilise l'API FastAPI directement **seulement** pour :
 Ordre de développement prévu : OCR → extraction regex (méthode de référence) → extraction LLM
 + fusion + confiance → API + contrôles + SQLite → workflow n8n → interface Streamlit → intégration.
 
-## 12. Évaluation (pour le rapport)
+## 13. Évaluation (pour le rapport)
 
 Comparer 4 configurations sur le jeu de test : saisie manuelle (chronométrée, 10 factures),
 regex seules, LLM seul, système complet. Mesures : précision par champ, factures entièrement
@@ -177,7 +190,7 @@ correctes, rappel/précision des doublons, part des erreurs signalées, temps pa
 Analyses : PDF natifs vs images ; modèles A-B-C vs D ; 3B vs 7B.
 Noter les paramètres de reproduction : modèle, température, prompt, version de Tesseract, graine.
 
-## 13. État d'avancement
+## 14. État d'avancement
 
 - [x] Jour 0 : Python, Tesseract (fra), Ollama (CPU) et modèles validés
 - [ ] Jour 0 : Docker Desktop à démarrer et vérifier
