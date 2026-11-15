@@ -436,6 +436,10 @@ def section_upload() -> None:
 
         st.markdown("---")
 
+    # Clé dynamique : changer sa valeur vide le file_uploader après traitement
+    if "upload_compteur" not in st.session_state:
+        st.session_state.upload_compteur = 0
+
     deja_envoye = bool(st.session_state.get("upload_resultats"))
     with st.expander("Déposer des factures", expanded=not deja_envoye):
         st.caption("Jusqu'à 10 fichiers PDF ou images.")
@@ -444,7 +448,7 @@ def section_upload() -> None:
             "Sélectionner des fichiers",
             type=["pdf", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
-            key="upload_factures",
+            key=f"upload_factures_{st.session_state.upload_compteur}",
             label_visibility="collapsed",
         )
 
@@ -482,6 +486,7 @@ def section_upload() -> None:
 
                 barre.progress(1.0, text="Terminé.")
                 st.session_state.upload_resultats = resultats
+                st.session_state.upload_compteur += 1  # vide le file_uploader
                 st.rerun()
 
 
