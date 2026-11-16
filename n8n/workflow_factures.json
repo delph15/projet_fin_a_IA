@@ -35,10 +35,9 @@
         "pollTimes": {
           "item": [{ "mode": "everyX", "value": 5, "unit": "minutes" }]
         },
-        "options": {
-          "downloadAttachments": true,
-          "attachmentsPrefix": "attachment_"
-        }
+        "options": {},
+        "format": "resolved",
+        "dataPropertyAttachmentsPrefixName": "attachment_"
       },
       "credentials": {
         "imap": {
