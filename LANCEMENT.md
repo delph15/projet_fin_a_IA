@@ -16,12 +16,15 @@ python generateur/generateur.py
 ```powershell
 docker compose up -d
 ```
+Le port local par défaut est `5678`. Si Windows le réserve, choisissez un port
+libre et non réservé puis changez `N8N_PORT` dans `.env` (par exemple `5800`) ;
+l'URL du webhook suit ce réglage.
 
 **Terminal 2 — API**
 ```powershell
 .venv\Scripts\Activate.ps1
-$env:PYTHONPATH = "D:\projet_fin_a_IA\api"
-uvicorn api.main:app --reload --port 8000
+$env:PYTHONPATH = "${PWD}\api"
+python -m uvicorn api.main:app --reload --port 8000
 ```
 
 **Terminal 3 — Interface**
@@ -36,6 +39,6 @@ streamlit run interface/app.py
 |---|---|
 | API | http://localhost:8000/docs |
 | Interface | http://localhost:8501 |
-| n8n | http://localhost:5678 |
+| n8n | http://localhost:5678 (port par défaut) |
 
 > Ollama tourne déjà en arrière-plan — ne pas le relancer.
