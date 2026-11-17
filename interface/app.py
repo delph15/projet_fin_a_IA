@@ -58,6 +58,16 @@ COLS_CHAMPS = ["fournisseur", "numero_facture", "date", "montant_ht", "tva", "mo
 COLS_CONF   = ["conf_fournisseur", "conf_numero", "conf_date", "conf_ht", "conf_tva", "conf_ttc"]
 COLS_SRC    = ["src_fournisseur",  "src_numero",  "src_date",  "src_ht",  "src_tva",  "src_ttc"]
 
+# Placeholder affiché dans le formulaire de correction selon le champ
+PLACEHOLDERS_CORRECTION = {
+    "fournisseur":    "ex : SARL Dupont",
+    "numero_facture": "ex : FAC-2026-0001",
+    "date":           "JJ/MM/AAAA  ou  AAAA-MM-JJ",
+    "montant_ht":     "ex : 900.00",
+    "tva":            "ex : 180.00",
+    "montant_ttc":    "ex : 1080.00",
+}
+
 FILTRE_LABELS = {
     "(tous)":     "(tous)",
     "validee":    "Validée",
@@ -72,6 +82,26 @@ FILTRE_LABELS = {
 # ---------------------------------------------------------------------------
 # Utilitaires d'affichage
 # ---------------------------------------------------------------------------
+
+def _iso_vers_fr(date_iso: str) -> str:
+    """Convertit 2026-11-01 → 01/11/2026 pour l'affichage. Retourne la valeur telle quelle si format inconnu."""
+    try:
+        a, m, j = date_iso.strip().split("-")
+        if len(a) == 4 and len(m) == 2 and len(j) == 2:
+            return f"{j}/{m}/{a}"
+    except (ValueError, AttributeError):
+        pass
+    return date_iso
+
+
+def _fr_vers_iso(date_fr: str) -> str:
+    """Convertit JJ/MM/AAAA → AAAA-MM-JJ. Retourne la valeur telle quelle si déjà ISO ou format inconnu."""
+    import re as _re
+    m = _re.match(r'^(\d{2})/(\d{2})/(\d{4})$', date_fr.strip())
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+    return date_fr.strip()
+
 
 def couleur_confiance(conf) -> str:
     if conf is None:
@@ -193,7 +223,15 @@ def afficher_champs(f: dict) -> None:
     """Champs extraits avec badges de confiance colorés."""
     lignes_html = []
     for champ, conf_col, src_col in zip(COLS_CHAMPS, COLS_CONF, COLS_SRC):
-        valeur  = f.get(champ) or "—"
+        v = f.get(champ)
+        if v is None:
+            valeur = "—"
+        elif champ in ("montant_ht", "tva", "montant_ttc") and isinstance(v, (int, float)):
+            valeur = f"{v:.2f}"
+        elif champ == "date" and v:
+            valeur = _iso_vers_fr(str(v))
+        else:
+            valeur = str(v) if v else "—"
         conf    = f.get(conf_col)
         src     = f.get(src_col, "")
         src_lib = SOURCE_LABELS.get(src, src or "—")
@@ -272,38 +310,50 @@ def afficher_detail(f: dict) -> None:
         if statut == "a_verifier":
             st.markdown("---")
             st.caption("Corriger un champ")
-            with st.form(key=f"form_corr_{id_facture}"):
-                col_sel, col_val = st.columns([1, 2])
-                with col_sel:
-                    champ_a_corriger = st.selectbox(
-                        "Champ",
-                        options=COLS_CHAMPS,
-                        format_func=lambda c: CHAMPS_LABELS[c],
-                        key=f"sel_{id_facture}",
-                        label_visibility="collapsed",
-                    )
-                with col_val:
-                    valeur_actuelle = f.get(champ_a_corriger, "")
-                    nouvelle_valeur = st.text_input(
-                        "Nouvelle valeur",
-                        value=str(valeur_actuelle) if valeur_actuelle else "",
-                        key=f"val_{id_facture}",
-                        label_visibility="collapsed",
-                        placeholder="Nouvelle valeur...",
-                    )
-                if st.form_submit_button("Appliquer"):
-                    val_finale = nouvelle_valeur
-                    if champ_a_corriger in ("montant_ht", "tva", "montant_ttc"):
-                        try:
-                            val_finale = float(nouvelle_valeur.replace(",", "."))
-                        except ValueError:
-                            st.error("Valeur numérique invalide.")
-                            st.stop()
-                    if corriger_facture(id_facture, {champ_a_corriger: val_finale}):
-                        st.success(f"{CHAMPS_LABELS[champ_a_corriger]} corrigé.")
-                        st.rerun()
-                    else:
-                        st.error("Échec de la correction.")
+            # Pas de st.form : le selectbox doit déclencher un rerun pour
+            # pré-remplir le text_input avec la valeur du champ sélectionné.
+            col_sel, col_val, col_btn = st.columns([1, 2, 1])
+            with col_sel:
+                champ_a_corriger = st.selectbox(
+                    "Champ",
+                    options=COLS_CHAMPS,
+                    format_func=lambda c: CHAMPS_LABELS[c],
+                    key=f"sel_{id_facture}",
+                    label_visibility="collapsed",
+                )
+            with col_val:
+                valeur_actuelle = f.get(champ_a_corriger)
+                if valeur_actuelle is not None and champ_a_corriger in ("montant_ht", "tva", "montant_ttc"):
+                    valeur_defaut = f"{float(valeur_actuelle):.2f}"
+                elif champ_a_corriger == "date" and valeur_actuelle:
+                    valeur_defaut = _iso_vers_fr(str(valeur_actuelle))
+                else:
+                    valeur_defaut = str(valeur_actuelle) if valeur_actuelle else ""
+                nouvelle_valeur = st.text_input(
+                    "Nouvelle valeur",
+                    value=valeur_defaut,
+                    key=f"val_{id_facture}_{champ_a_corriger}",
+                    label_visibility="collapsed",
+                    placeholder=PLACEHOLDERS_CORRECTION.get(champ_a_corriger, "Nouvelle valeur..."),
+                )
+            with col_btn:
+                st.write("")  # alignement vertical
+                appliquer = st.button("Appliquer", key=f"btn_corr_{id_facture}")
+            if appliquer:
+                val_finale = nouvelle_valeur
+                if champ_a_corriger in ("montant_ht", "tva", "montant_ttc"):
+                    try:
+                        val_finale = float(nouvelle_valeur.replace(",", "."))
+                    except ValueError:
+                        st.error("Valeur numérique invalide.")
+                        st.stop()
+                elif champ_a_corriger == "date":
+                    val_finale = _fr_vers_iso(nouvelle_valeur)
+                if corriger_facture(id_facture, {champ_a_corriger: val_finale}):
+                    st.success(f"{CHAMPS_LABELS[champ_a_corriger]} corrigé.")
+                    st.rerun()
+                else:
+                    st.error("Échec de la correction.")
 
         # Boutons Valider / Rejeter
         if statut in ("prete", "a_verifier"):
