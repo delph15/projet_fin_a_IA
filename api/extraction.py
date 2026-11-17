@@ -7,6 +7,7 @@
 # Champs  : fournisseur, numero_facture, date, montant_ht, tva, montant_ttc
 
 import re
+from datetime import date as _date_cls
 from typing import Optional
 
 
@@ -62,14 +63,35 @@ def normaliser_nombre(texte: str) -> Optional[float]:
 # Numero de facture
 # ---------------------------------------------------------------------------
 
-_RE_NUMERO = re.compile(r"FAC-\d{4}-\d{4}", re.IGNORECASE)
+# Pattern 1 : format interne FAC-AAAA-NNNN (avec espaces OCR tolerés autour des tirets)
+_RE_NUMERO_FAC = re.compile(r"FAC\s*[-–]\s*\d{4}\s*[-–]\s*\d{3,6}", re.IGNORECASE)
+
+# Pattern 2 : reference apres un label explicite (Réf., Référence, N°, Numéro, Facture n°…)
+_RE_NUMERO_LABEL = re.compile(
+    r"(?:r[eé]f(?:\.|\s+facture)?|r[eé]f[eé]rence|n[o°°]\s*(?:de\s+facture)?|num[eé]ro\s+(?:de\s+)?facture|facture\s+n[o°°])"
+    r"\s*[:.\-]?\s*([A-Z0-9][-A-Z0-9/\s]{2,20})",
+    re.IGNORECASE,
+)
+
+
+def _nettoyer_numero(valeur: str) -> str:
+    """Supprime les espaces autour des tirets (artefacts OCR) et met en majuscules."""
+    return re.sub(r"\s*[-–]\s*", "-", valeur).strip().upper()
 
 
 def _extraire_numero(texte: str) -> dict:
-    """Cherche le pattern FAC-AAAA-NNNN dans le texte."""
-    m = _RE_NUMERO.search(texte)
+    """Cherche le numéro de facture : d'abord le pattern interne FAC-AAAA-NNNN,
+    puis tout identifiant après un label de référence."""
+    m = _RE_NUMERO_FAC.search(texte)
     if m:
-        return {"valeur": m.group(0).upper(), "confiance": 0.98, "source": "regex"}
+        return {"valeur": _nettoyer_numero(m.group(0)), "confiance": 0.98, "source": "regex"}
+
+    m = _RE_NUMERO_LABEL.search(texte)
+    if m:
+        valeur = _nettoyer_numero(m.group(1).split()[0] if m.group(1) else "")
+        if valeur:
+            return {"valeur": valeur, "confiance": 0.85, "source": "regex"}
+
     return {"valeur": None, "confiance": 0.0, "source": "regex"}
 
 
@@ -77,35 +99,62 @@ def _extraire_numero(texte: str) -> dict:
 # Date
 # ---------------------------------------------------------------------------
 
-_RE_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+# Format ISO : AAAA-MM-JJ (avec espaces OCR tolérés autour des tirets)
+_RE_DATE_ISO = re.compile(r"\b(\d{4})\s*[-–]\s*(\d{2})\s*[-–]\s*(\d{2})\b")
 
+# Format européen : JJ/MM/AAAA ou JJ-MM-AAAA
+_RE_DATE_EU = re.compile(r"\b(\d{2})[/\-](\d{2})[/\-](\d{4})\b")
 
-def _valider_date(date_iso: str) -> bool:
-    """Verifie qu'une date ISO est calendairement valide."""
+# Format après label : "Émise le", "Date", "Date d'émission", "Date de facturation"
+_RE_DATE_LABEL = re.compile(
+    r"(?:[eé]mise?\s+le|date\s+(?:d['’])?[eé]mission|date\s+de\s+facturation|date\s+[:.\-]?)",
+    re.IGNORECASE,
+)
+
+def _valider_date(annee: int, mois: int, jour: int) -> bool:
     try:
-        from datetime import date
-        annee, mois, jour = map(int, date_iso.split("-"))
-        date(annee, mois, jour)
+        _date_cls(annee, mois, jour)
         return True
     except (ValueError, TypeError):
         return False
 
 
 def _extraire_date(texte: str) -> dict:
-    """Cherche la premiere date au format AAAA-MM-JJ."""
-    matches = _RE_DATE.findall(texte)
-    for d in matches:
-        if _valider_date(d):
-            return {"valeur": d, "confiance": 0.98, "source": "regex"}
+    """Cherche une date dans le texte, en privilégiant les lignes après un label de date.
+    Formats reconnus : AAAA-MM-JJ (ISO) et JJ/MM/AAAA (européen).
+    """
+    lignes = texte.splitlines()
+
+    # Passe 1 : lignes contenant un label de date explicite
+    for ligne in lignes:
+        if _RE_DATE_LABEL.search(ligne):
+            for m in _RE_DATE_ISO.finditer(ligne):
+                a, mo, j = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if _valider_date(a, mo, j):
+                    return {"valeur": f"{a:04d}-{mo:02d}-{j:02d}", "confiance": 0.98, "source": "regex"}
+            for m in _RE_DATE_EU.finditer(ligne):
+                j, mo, a = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if _valider_date(a, mo, j):
+                    return {"valeur": f"{a:04d}-{mo:02d}-{j:02d}", "confiance": 0.95, "source": "regex"}
+
+    # Passe 2 : première date ISO valide dans tout le texte
+    for m in _RE_DATE_ISO.finditer(texte):
+        a, mo, j = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _valider_date(a, mo, j):
+            return {"valeur": f"{a:04d}-{mo:02d}-{j:02d}", "confiance": 0.95, "source": "regex"}
+
+    # Passe 3 : première date européenne valide dans tout le texte
+    for m in _RE_DATE_EU.finditer(texte):
+        j, mo, a = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _valider_date(a, mo, j):
+            return {"valeur": f"{a:04d}-{mo:02d}-{j:02d}", "confiance": 0.90, "source": "regex"}
+
     return {"valeur": None, "confiance": 0.0, "source": "regex"}
 
 
 # ---------------------------------------------------------------------------
 # Montants (HT, TVA, TTC) - approche par ligne
 # ---------------------------------------------------------------------------
-# Strategie : trouver la ligne qui contient l'etiquette, puis prendre le
-# DERNIER nombre de cette ligne. Cela evite de capturer le pourcentage "20"
-# dans "TVA (20 %) : 646.64 EUR" avant le montant reel.
 
 _RE_ETIQ_HT = re.compile(
     r"\b(?:montant\s+h[ot]|montant\s+hors\s+taxe|base\s+ht|^ht)\b",
@@ -117,29 +166,68 @@ _RE_ETIQ_TTC = re.compile(
     re.IGNORECASE,
 )
 
+# Supprime les pourcentages (ex. "20 %", "20%") pour ne pas les confondre avec un montant
+_RE_POURCENTAGE = re.compile(r"\d+\s*%")
 
-def _dernier_nombre_de_ligne(ligne: str) -> Optional[float]:
-    """Retourne le dernier nombre trouve dans une ligne, normalise."""
+
+def _dernier_nombre_de_ligne(ligne: str, strip_pct: bool = False) -> Optional[float]:
+    """Retourne le dernier nombre trouvé dans une ligne, normalisé.
+
+    Si strip_pct=True, supprime d'abord les pourcentages (utile pour la ligne TVA
+    qui contient "20 %" avant le montant réel).
+
+    Heuristique OCR : si les deux derniers tokens sont un entier suivi de exactement
+    2 chiffres sans séparateur (ex. "180" "13"), tente de les fusionner en "180.13"
+    — artefact fréquent quand l'OCR lit le point décimal comme une espace.
+    """
+    if strip_pct:
+        ligne = _RE_POURCENTAGE.sub("", ligne)
+
     nombres = _RE_NOMBRE.findall(ligne)
     if not nombres:
         return None
+
+    # Heuristique : "180" + "13" → 180.13 (OCR a lu "." comme espace)
+    if len(nombres) >= 2:
+        dern  = nombres[-1].strip()
+        avant = nombres[-2].strip()
+        if (re.fullmatch(r"\d{2}", dern)
+                and re.fullmatch(r"\d{2,6}", avant)):
+            tente = normaliser_nombre(f"{avant}.{dern}")
+            if tente is not None:
+                return tente
+
     return normaliser_nombre(nombres[-1].strip())
 
 
-def _montant_par_etiquette(etiquette: re.Pattern, texte: str) -> Optional[float]:
-    """Cherche la premiere ligne contenant l'etiquette et retourne son dernier nombre."""
-    for ligne in texte.splitlines():
+def _montant_par_etiquette(
+    etiquette: re.Pattern,
+    texte: str,
+    strip_pct: bool = False,
+) -> Optional[float]:
+    """Cherche la première ligne contenant l'étiquette et retourne son dernier nombre.
+
+    Si aucun montant n'est trouvé sur la ligne de l'étiquette (cas des tableaux OCR
+    où le montant est renvoyé à la ligne suivante), tente la ligne suivante.
+    """
+    lignes = texte.splitlines()
+    for i, ligne in enumerate(lignes):
         if etiquette.search(ligne):
-            valeur = _dernier_nombre_de_ligne(ligne)
-            if valeur is not None:
+            valeur = _dernier_nombre_de_ligne(ligne, strip_pct=strip_pct)
+            if valeur is not None and valeur > 0:
                 return valeur
+            # Montant peut être sur la ligne suivante (tableau OCR)
+            if i + 1 < len(lignes):
+                valeur = _dernier_nombre_de_ligne(lignes[i + 1], strip_pct=False)
+                if valeur is not None and valeur > 0:
+                    return valeur
     return None
 
 
 def _extraire_montants(texte: str) -> tuple:
     """Retourne (montant_ht, tva, montant_ttc) chacun sous forme de dict champ."""
     ht  = _montant_par_etiquette(_RE_ETIQ_HT,  texte)
-    tva = _montant_par_etiquette(_RE_ETIQ_TVA, texte)
+    tva = _montant_par_etiquette(_RE_ETIQ_TVA, texte, strip_pct=True)
     ttc = _montant_par_etiquette(_RE_ETIQ_TTC, texte)
 
     conf_ht  = 0.90 if ht  is not None else 0.0

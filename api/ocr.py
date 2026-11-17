@@ -22,8 +22,9 @@ _TESSERACT_CMD = os.getenv(
 )
 pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
 
-# Configuration Tesseract : mode page "bloc de texte uniforme", sortie brute
-_CONFIG_TESS = "--oem 3 --psm 6 -l fra"
+# Configuration Tesseract : mode page "bloc de texte uniforme"
+# preserve_interword_spaces : conserve les espaces entre colonnes de tableau
+_CONFIG_TESS = "--oem 3 --psm 6 -l fra -c preserve_interword_spaces=1"
 
 # Extensions reconnues comme images
 _EXTENSIONS_IMAGE = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp"}
@@ -36,26 +37,28 @@ _EXTENSIONS_IMAGE = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp"}
 def _preparer_image(chemin: Path) -> Image.Image:
     """
     Prépare une image pour Tesseract :
-    - conversion en niveaux de gris
-    - agrandissement si l'image est petite (Tesseract préfère ≥ 300 dpi)
-    - binarisation adaptative (seuil d'Otsu simulé via point())
-    - léger filtre de netteté
+    1. Conversion en niveaux de gris
+    2. Agrandissement à 1500 px minimum (Tesseract recommande ≥ 300 dpi)
+    3. Binarisation seuil 150 (empiriquement stable sur les factures scannées)
+    4. Netteté finale
     """
-    img = Image.open(chemin).convert("L")  # niveaux de gris
+    img = Image.open(chemin).convert("L")
 
-    # Agrandir si trop petite
+    # Agrandissement
     largeur, hauteur = img.size
-    if largeur < 1000:
-        facteur = 1000 / largeur
+    if largeur < 1500:
+        facteur = 1500 / largeur
         img = img.resize(
             (int(largeur * facteur), int(hauteur * facteur)),
             Image.LANCZOS,
         )
 
-    # Binarisation simple : pixels < 150 → noir, autres → blanc
+    # Binarisation directe — pas d'autocontrast ni de filtre médian :
+    # ces transformations peuvent flouter les traits fins ou pousser les
+    # pixels gris clairs (chiffres en tableau) vers le blanc, ce qui fait
+    # chuter la confiance Tesseract.
     img = img.point(lambda p: 0 if p < 150 else 255)
 
-    # Netteté
     img = img.filter(ImageFilter.SHARPEN)
 
     return img

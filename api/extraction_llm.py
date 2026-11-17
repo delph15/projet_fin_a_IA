@@ -36,10 +36,50 @@ Reponds UNIQUEMENT avec un objet JSON valide, sans texte autour, avec cette stru
   "montant_ttc": 0.00
 }
 Regles :
-- date obligatoirement au format ISO AAAA-MM-JJ
+- date obligatoirement au format ISO AAAA-MM-JJ (convertir JJ/MM/AAAA si nécessaire)
 - montant_ht, tva, montant_ttc : nombres decimaux (point decimal, pas de symbole monetaire)
+- tva : montant en euros, PAS le pourcentage (ex. 180.13 et non 20)
+- numero_facture : l'identifiant de la facture, peu importe son label (Réf., N°, Référence...)
 - Si un champ est absent du texte : null
 - Ne jamais inventer une valeur qui n'apparait pas dans le texte\
+"""
+
+# Exemples few-shot : montrent les labels non standards les plus fréquents
+_EXEMPLES_FEW_SHOT = """\
+
+=== Exemples ===
+
+Exemple 1 — labels standards :
+Texte :
+SARL Dupont Technologies
+Numéro de facture : FAC-2024-0042
+Date : 2024-03-15
+Montant HT : 500.00
+TVA 20 % : 100.00
+Total TTC : 600.00
+Résultat : {"fournisseur": "SARL Dupont Technologies", "numero_facture": "FAC-2024-0042", "date": "2024-03-15", "montant_ht": 500.00, "tva": 100.00, "montant_ttc": 600.00}
+
+Exemple 2 — labels non standards (Réf. facture, Émise le, Montant hors taxe) :
+Texte :
+Goncalves Schmitt S.A.R.L.
+Réf. facture : FAC-2025-0028
+Émise le 2026-11-01
+Montant hors taxe : 900.67
+TVA 20 % : 180.13
+Total TTC : 1080.80
+Résultat : {"fournisseur": "Goncalves Schmitt S.A.R.L.", "numero_facture": "FAC-2025-0028", "date": "2026-11-01", "montant_ht": 900.67, "tva": 180.13, "montant_ttc": 1080.80}
+
+Exemple 3 — date européenne, Net à payer :
+Texte :
+Martin & Associés
+Facture N° FAC-2024-0099
+Date d'émission : 15/09/2024
+Base HT : 1200.00
+TVA (20%) : 240.00
+Net à payer : 1440.00
+Résultat : {"fournisseur": "Martin & Associés", "numero_facture": "FAC-2024-0099", "date": "2024-09-15", "montant_ht": 1200.00, "tva": 240.00, "montant_ttc": 1440.00}
+
+=== Facture à analyser ===\
 """
 
 
@@ -52,7 +92,7 @@ def _appeler_ollama(texte: str) -> Optional[dict]:
     Envoie le texte a Ollama et retourne le dict JSON parse.
     Retourne None si l'appel echoue ou si la reponse n'est pas du JSON valide.
     """
-    prompt = f"{_PROMPT_SYSTEME}\n\nTexte de la facture :\n{texte}"
+    prompt = f"{_PROMPT_SYSTEME}\n{_EXEMPLES_FEW_SHOT}\n{texte}"
     payload = {
         "model":      _MODELE,
         "prompt":     prompt,
@@ -98,11 +138,26 @@ def _normaliser_date(valeur) -> Optional[str]:
 
 
 def _normaliser_numero(valeur) -> Optional[str]:
-    """Extrait et normalise un numero de facture FAC-AAAA-NNNN."""
+    """Normalise un numéro de facture : accepte tout format alphanumérique.
+
+    Priorité au pattern interne FAC-AAAA-NNNN ; sinon accepte tout identifiant
+    contenant au moins 3 caractères alphanumériques (ex. INV-2024-0099).
+    """
     if not valeur or not isinstance(valeur, str):
         return None
+    valeur = valeur.strip()
+    # Supprimer les préfixes parasites type "Réf. : " ou "N° "
+    valeur = re.sub(r"^[^A-Za-z0-9]+", "", valeur)
+    # Normaliser les espaces autour des tirets (artefact OCR)
+    valeur = re.sub(r"\s*[-–]\s*", "-", valeur).upper()
+    # Priorité : format interne FAC-AAAA-NNNN
     m = _RE_NUMERO_FAC.search(valeur)
-    return m.group(0).upper() if m else None
+    if m:
+        return m.group(0).upper()
+    # Accepter tout identifiant avec au moins 3 caractères alphanum
+    if re.search(r"[A-Z0-9]{3}", valeur):
+        return valeur
+    return None
 
 
 def _normaliser_montant(valeur) -> Optional[float]:
