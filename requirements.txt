@@ -20,7 +20,7 @@ python-multipart
 # sqlite3 est inclus dans la bibliothèque standard Python
 
 # Interface
-streamlit
+streamlit>=1.37
 
 # Tests
 pytest

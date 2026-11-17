@@ -1,28 +1,75 @@
-version: "3.8"
-
 services:
   n8n:
     image: n8nio/n8n:latest
-    container_name: n8n
     restart: unless-stopped
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
     environment:
-      # Fuseau horaire
-      - GENERIC_TIMEZONE=Europe/Paris
-      - TZ=Europe/Paris
-      # Désactiver l'authentification en développement local
-      - N8N_BASIC_AUTH_ACTIVE=false
-      # Autoriser l'accès aux fichiers dans le volume monté
-      - N8N_RESTRICT_FILE_ACCESS_TO=/data/factures
+      GENERIC_TIMEZONE: Europe/Paris
+      TZ: Europe/Paris
+      N8N_BASIC_AUTH_ACTIVE: "false"
+      N8N_RESTRICT_FILE_ACCESS_TO: /data/factures
+      N8N_EDITOR_BASE_URL: http://localhost:${N8N_PORT:-5678}/
+      WEBHOOK_URL: http://localhost:${N8N_PORT:-5678}/
     volumes:
-      # Persistance des workflows n8n
       - n8n_data:/home/node/.n8n
-      # Accès aux factures depuis le conteneur
       - ./donnees:/data/factures
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+    image: factures-app:local
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DB_PATH: donnees/factures.db
+      DOSSIER_ORIGINAUX: donnees/originaux
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODELE: ${OLLAMA_MODELE:-qwen2.5:7b}
+      TESSERACT_CMD: /usr/bin/tesseract
+    ports:
+      - "127.0.0.1:${API_PORT:-11435}:8000"
+    volumes:
+      - ./donnees:/app/donnees
     extra_hosts:
-      # Permet à n8n d'atteindre l'API FastAPI et Ollama sur Windows
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  interface:
+    image: factures-app:local
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - streamlit
+      - run
+      - interface/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+    environment:
+      API_URL: http://api:8000
+      N8N_WEBHOOK_URL: http://n8n:5678/webhook/facture
+    ports:
+      - "127.0.0.1:${STREAMLIT_PORT:-9400}:8501"
+    volumes:
+      - ./donnees:/app/donnees
+    depends_on:
+      api:
+        condition: service_healthy
+      n8n:
+        condition: service_started
 
 volumes:
   n8n_data:
