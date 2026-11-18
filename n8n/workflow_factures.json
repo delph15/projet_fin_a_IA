@@ -1,0 +1,388 @@
+{
+  "name": "Traitement des factures",
+  "nodes": [
+    {
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Webhook entrant",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 200],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "facture",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Lire le fichier",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [480, 200],
+      "parameters": {
+        "filePath": "={{ $json.body?.chemin ?? $json.chemin }}"
+      }
+    },
+    {
+      "id": "a1b2c3d4-0003-0003-0003-000000000003",
+      "name": "Envoyer a l API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [720, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/factures/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "fichier",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-0004-0004-0004-000000000004",
+      "name": "Routage par statut",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [960, 200],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.statut }}",
+                    "rightValue": "prete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "prete"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.statut }}",
+                    "rightValue": "a_verifier",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "a_verifier"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.statut }}",
+                    "rightValue": "doublon",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "doublon"
+            }
+          ]
+        },
+        "fallbackOutput": "extra"
+      }
+    },
+    {
+      "id": "a1b2c3d4-0009-0009-0009-000000000009",
+      "name": "Repondre prete",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 80],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-0010-0010-0010-000000000010",
+      "name": "Repondre a verifier",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 200],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-0011-0011-0011-000000000011",
+      "name": "Repondre doublon",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 320],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-00ee-00ee-00ee-000000000ee0",
+      "name": "Email Trigger IMAP",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [240, 500],
+      "parameters": {
+        "mailbox": "INBOX",
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "options": {},
+        "format": "resolved",
+        "dataPropertyAttachmentsPrefixName": "attachment_"
+      },
+      "credentials": {
+        "imap": {
+          "id": "imap-factures",
+          "name": "IMAP Factures"
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-00ed-00ed-00ed-000000000ed0",
+      "name": "Normaliser piece jointe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 500],
+      "parameters": {
+        "jsCode": "const item = items[0];\nconst binaryKeys = Object.keys(item.binary || {});\nif (binaryKeys.length === 0) {\n  throw new Error('Pas de piece jointe binaire dans cet email. Verifiez que le mail contient bien un fichier PDF ou image en piece jointe.');\n}\nreturn [{\n  json: item.json,\n  binary: { attachment_0: item.binary[binaryKeys[0]] }\n}];"
+      }
+    },
+    {
+      "id": "a1b2c3d4-00ef-00ef-00ef-000000000ef0",
+      "name": "Envoyer a l API depuis email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [720, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/factures/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "fichier",
+              "inputDataFieldName": "attachment_0"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-00f0-00f0-00f0-000000000f00",
+      "name": "Resultat email",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [960, 500],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "source",
+              "value": "email",
+              "type": "string"
+            },
+            {
+              "id": "e2",
+              "name": "statut",
+              "value": "={{ $json.statut }}",
+              "type": "string"
+            },
+            {
+              "id": "e3",
+              "name": "id_facture",
+              "value": "={{ $json.id }}",
+              "type": "number"
+            },
+            {
+              "id": "e4",
+              "name": "message",
+              "value": "={{ 'Email : facture ' + $json.fichier + ' traitee, statut=' + $json.statut }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1b2c3d4-0008-0008-0008-000000000008",
+      "name": "Note configuration email",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 700],
+      "parameters": {
+        "content": "## Configurer la réception email\n\n1. Dans n8n → **Credentials** → **New** → choisir **IMAP**\n2. Remplir les paramètres IMAP du compte de réception\n3. Nommer la credential **IMAP Factures** et l'associer au nœud **Email Trigger IMAP**\n\nLe nœud vérifie la boîte toutes les **5 minutes**.",
+        "height": 220,
+        "width": 500,
+        "color": 3
+      }
+    }
+  ],
+  "connections": {
+    "Webhook entrant": {
+      "main": [
+        [
+          {
+            "node": "Lire le fichier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire le fichier": {
+      "main": [
+        [
+          {
+            "node": "Envoyer a l API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envoyer a l API": {
+      "main": [
+        [
+          {
+            "node": "Routage par statut",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Routage par statut": {
+      "main": [
+        [
+          {
+            "node": "Repondre prete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Repondre a verifier",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Repondre doublon",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Trigger IMAP": {
+      "main": [
+        [
+          {
+            "node": "Normaliser piece jointe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normaliser piece jointe": {
+      "main": [
+        [
+          {
+            "node": "Envoyer a l API depuis email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envoyer a l API depuis email": {
+      "main": [
+        [
+          {
+            "node": "Resultat email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "projet-factures-m1"
+  }
+}

@@ -54,7 +54,7 @@
       "position": [720, 200],
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:8000/factures/",
+        "url": "http://api:8000/factures/",
         "sendBody": true,
         "contentType": "multipart-form-data",
         "bodyParameters": {
@@ -76,7 +76,8 @@
       "typeVersion": 2,
       "position": [480, 500],
       "parameters": {
-        "jsCode": "const item = items[0];\nconst binaryKeys = Object.keys(item.binary || {});\nif (binaryKeys.length === 0) {\n  throw new Error('Pas de piece jointe binaire dans cet email. Verifiez que le mail contient bien un fichier PDF ou image en piece jointe.');\n}\nreturn [{\n  json: item.json,\n  binary: { attachment_0: item.binary[binaryKeys[0]] }\n}];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sorties = [];\nfor (const [index, item] of items.entries()) {\n  const pieces = Object.keys(item.binary || {});\n  if (pieces.length === 0) {\n    throw new Error('Pas de piece jointe binaire dans cet email.');\n  }\n  const cleEmail = String(item.json.messageId || item.json.uid || `${item.json.date || ''}-${item.json.subject || ''}-${index}`);\n  for (const cle of pieces) {\n    const binaire = item.binary[cle];\n    sorties.push({\n      json: {\n        cle_email: cleEmail,\n        sujet: item.json.subject || '(sans objet)',\n        nb_fichiers_recus: pieces.length,\n        fichier: binaire.fileName || cle\n      },\n      binary: { attachment_0: binaire }\n    });\n  }\n}\nreturn sorties;"
       }
     },
     {
@@ -87,7 +88,7 @@
       "position": [720, 500],
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:8000/factures/",
+        "url": "http://api:8000/factures/",
         "sendBody": true,
         "contentType": "multipart-form-data",
         "bodyParameters": {
@@ -96,29 +97,45 @@
               "parameterType": "formBinaryData",
               "name": "fichier",
               "inputDataFieldName": "attachment_0"
+            },
+            {
+              "parameterType": "formData",
+              "name": "source",
+              "value": "email"
             }
           ]
         },
         "options": { "timeout": 120000 }
-      }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "a1b2c3d4-00f0-00f0-00f0-000000000f00",
-      "name": "Resultat email",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3,
+      "name": "Consolider resultats email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [960, 500],
       "parameters": {
-        "mode": "manual",
-        "assignments": {
-          "assignments": [
-            { "id": "e1", "name": "source",     "value": "email",                                               "type": "string" },
-            { "id": "e2", "name": "statut",      "value": "={{ $json.statut }}",                                "type": "string" },
-            { "id": "e3", "name": "id_facture",  "value": "={{ $json.id }}",                                    "type": "number" },
-            { "id": "e4", "name": "message",     "value": "={{ 'Email : facture ' + $json.fichier + ' traitee, statut=' + $json.statut }}", "type": "string" }
-          ]
-        },
-        "options": {}
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sources = $('Normaliser piece jointe').all();\nconst reponses = $input.all();\nconst notifications = new Map();\nfor (let index = 0; index < sources.length; index++) {\n  const source = sources[index].json;\n  const reponse = reponses[index]?.json || {};\n  const erreur = typeof reponse.error === 'string' ? reponse.error : reponse.error?.message || reponse.message || reponse.detail || (!reponse.id ? 'Résultat API manquant' : null);\n  let notification = notifications.get(source.cle_email);\n  if (!notification) {\n    notification = {\n      cle_email: source.cle_email,\n      sujet: source.sujet,\n      nb_fichiers_recus: source.nb_fichiers_recus,\n      fichiers: []\n    };\n    notifications.set(source.cle_email, notification);\n  }\n  notification.fichiers.push({\n    fichier: source.fichier,\n    statut: reponse.statut || (erreur ? 'erreur' : null),\n    id_facture: reponse.id || null,\n    erreur: erreur ? String(erreur) : null\n  });\n}\nreturn Array.from(notifications.values()).map(json => ({ json }));"
+      }
+    },
+    {
+      "id": "a1b2c3d4-00f1-00f1-00f1-000000000f10",
+      "name": "Enregistrer notification email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/notifications/email/",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 10000
+        }
       }
     },
     {
@@ -261,7 +278,8 @@
     "Email Trigger IMAP":          { "main": [[{ "node": "Normaliser piece jointe",      "type": "main", "index": 0 }]] },
     "Normaliser piece jointe":     { "main": [[{ "node": "Envoyer a l API depuis email", "type": "main", "index": 0 }]] },
     "Envoyer a l API":             { "main": [[{ "node": "Routage par statut",           "type": "main", "index": 0 }]] },
-    "Envoyer a l API depuis email":{ "main": [[{ "node": "Resultat email",              "type": "main", "index": 0 }]] },
+    "Envoyer a l API depuis email":{ "main": [[{ "node": "Consolider resultats email",  "type": "main", "index": 0 }]] },
+    "Consolider resultats email":  { "main": [[{ "node": "Enregistrer notification email", "type": "main", "index": 0 }]] },
     "Routage par statut": {
       "main": [
         [{ "node": "Prete a valider",         "type": "main", "index": 0 }],

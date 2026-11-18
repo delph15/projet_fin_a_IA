@@ -16,14 +16,17 @@ import os
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from base import (
     corriger_champs,
+    enregistrer_notification_email,
     initialiser_base,
     inserer_facture,
     lister_factures,
+    lister_notifications_email as charger_notifications_email,
     mettre_a_jour_statut,
     obtenir_connexion,
     obtenir_facture,
@@ -42,6 +45,20 @@ app = FastAPI(
 
 # Dossier de conservation des fichiers originaux
 DOSSIER_ORIGINAUX = Path(os.getenv("DOSSIER_ORIGINAUX", "donnees/originaux"))
+
+
+class ResultatFichierEmail(BaseModel):
+    fichier: str
+    statut: str | None = None
+    id_facture: int | None = None
+    erreur: str | None = None
+
+
+class NotificationEmail(BaseModel):
+    cle_email: str = Field(min_length=1)
+    sujet: str
+    nb_fichiers_recus: int = Field(ge=1)
+    fichiers: list[ResultatFichierEmail] = Field(min_length=1)
 
 
 # ---------------------------------------------------------------------------
@@ -76,11 +93,17 @@ def assembler_facture(nom_fichier: str, chemin_original: str, champs: dict, resu
 # ---------------------------------------------------------------------------
 
 @app.post("/factures/", status_code=201)
-async def soumettre_facture(fichier: UploadFile = File(...)):
+async def soumettre_facture(
+    fichier: UploadFile = File(...),
+    source: str = Form(default="interface"),
+):
     """
     Recoit un fichier PDF ou image, applique le pipeline complet et
     enregistre le resultat en base. Appele par le webhook n8n.
     """
+    if source not in {"interface", "email"}:
+        raise HTTPException(status_code=400, detail="Source non supportee")
+
     extensions_acceptees = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"}
     suffixe = Path(fichier.filename).suffix.lower()
     if suffixe not in extensions_acceptees:
@@ -121,6 +144,7 @@ async def soumettre_facture(fichier: UploadFile = File(...)):
             champs,
             resultats_ctrl,
         )
+        facture["source"] = source
         id_facture = inserer_facture(conn, facture)
         conn.close()
 
@@ -131,6 +155,7 @@ async def soumettre_facture(fichier: UploadFile = File(...)):
     return {
         "id":        id_facture,
         "fichier":   fichier.filename,
+        "source":    source,
         "statut":    resultats_ctrl["statut"],
         "champs":    {
             cle: {
@@ -155,6 +180,38 @@ def lister(statut: str = Query(default=None)):
     rows = lister_factures(conn, statut)
     conn.close()
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Notifications des factures reçues par e-mail
+# ---------------------------------------------------------------------------
+
+@app.post("/notifications/email/", status_code=201)
+def creer_notification_email(notification: NotificationEmail):
+    if len(notification.fichiers) != notification.nb_fichiers_recus:
+        raise HTTPException(
+            status_code=400,
+            detail="Le nombre de résultats doit correspondre aux pièces jointes reçues",
+        )
+
+    conn = obtenir_connexion()
+    try:
+        id_notification = enregistrer_notification_email(
+            conn,
+            notification.model_dump(),
+        )
+    finally:
+        conn.close()
+    return {"id": id_notification}
+
+
+@app.get("/notifications/email/")
+def lister_notifications_email(limite: int = Query(default=5, ge=1, le=20)):
+    conn = obtenir_connexion()
+    try:
+        return charger_notifications_email(conn, limite)
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

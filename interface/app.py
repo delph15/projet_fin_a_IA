@@ -152,6 +152,20 @@ def get_factures(statut: str = None) -> list[dict]:
         return []
 
 
+def get_notifications_email(limite: int = 5) -> list[dict]:
+    try:
+        r = requests.get(
+            f"{API_URL}/notifications/email/",
+            params={"limite": limite},
+            timeout=5,
+        )
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as e:
+        st.error(f"Impossible de charger les notifications e-mail : {e}")
+        return []
+
+
 def get_facture(id_facture: int) -> dict | None:
     try:
         r = requests.get(f"{API_URL}/factures/{id_facture}", timeout=5)
@@ -394,7 +408,7 @@ def afficher_tableau_de_bord(toutes: list[dict]) -> None:
         s = f.get("statut", "inconnu")
         compteurs[s] = compteurs.get(s, 0) + 1
 
-    ordre = ["a_verifier", "prete", "validee", "rejetee", "doublon", "recue"]
+    ordre = ["a_verifier", "prete", "validee", "rejetee", "doublon"]
     cols  = st.columns(len(ordre))
     for col, statut in zip(cols, ordre):
         n                 = compteurs.get(statut, 0)
@@ -406,6 +420,37 @@ def afficher_tableau_de_bord(toutes: list[dict]) -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
+
+
+@st.fragment(run_every="10s")
+def afficher_notifications_email() -> None:
+    st.subheader("Notifications e-mail")
+    notifications = get_notifications_email()
+    if not notifications:
+        st.caption("Aucun courriel traité récemment.")
+        return
+
+    for notification in notifications:
+        recus = notification["nb_fichiers_recus"]
+        traites = notification["nb_fichiers_traites"]
+        erreurs = max(recus - traites, 0)
+        sujet = notification.get("sujet") or "(sans objet)"
+
+        message = f"Courriel reçu — {recus} fichier(s) joint(s), {traites} traité(s)"
+        if erreurs:
+            st.warning(f"{message}, {erreurs} en erreur ou non pris en charge.")
+        else:
+            st.success(message + ".")
+
+        st.caption(f"Objet : {sujet} · Traité le {notification['cree_le']}")
+        for fichier in notification["fichiers"]:
+            nom = fichier["fichier"]
+            if fichier.get("erreur"):
+                st.caption(f"• {nom} — Erreur : {fichier['erreur']}")
+            else:
+                statut = fichier.get("statut", "inconnu")
+                libelle = COULEUR_STATUT.get(statut, ("#888888", statut))[1]
+                st.caption(f"• {nom} — {libelle}")
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +701,8 @@ def main() -> None:
     toutes = get_factures()
     if toutes:
         afficher_tableau_de_bord(toutes)
+    st.markdown("---")
+    afficher_notifications_email()
     st.markdown("---")
 
     onglet1, onglet2 = st.tabs(["File d'attente", "Historique"])

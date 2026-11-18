@@ -32,6 +32,7 @@ def initialiser_base(conn: sqlite3.Connection) -> None:
             fichier          TEXT    NOT NULL,
             empreinte        TEXT,
             statut           TEXT    NOT NULL DEFAULT 'recue',
+            source           TEXT    NOT NULL DEFAULT 'interface',
 
             -- Champs extraits
             fournisseur      TEXT,
@@ -79,6 +80,25 @@ def initialiser_base(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE factures ADD COLUMN chemin_original TEXT")
     except Exception:
         pass
+    colonnes = {
+        ligne["name"]
+        for ligne in conn.execute("PRAGMA table_info(factures)").fetchall()
+    }
+    if "source" not in colonnes:
+        conn.execute(
+            "ALTER TABLE factures ADD COLUMN source TEXT NOT NULL DEFAULT 'interface'"
+        )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications_email (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            cle_email             TEXT    NOT NULL,
+            sujet                 TEXT    NOT NULL,
+            nb_fichiers_recus     INTEGER NOT NULL,
+            nb_fichiers_traites   INTEGER NOT NULL,
+            fichiers_json         TEXT    NOT NULL,
+            cree_le               TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
     conn.commit()
 
 
@@ -109,14 +129,14 @@ def inserer_facture(conn: sqlite3.Connection, facture: dict) -> int:
 
     cur = conn.execute("""
         INSERT INTO factures (
-            fichier, empreinte, statut, chemin_original,
+            fichier, empreinte, statut, source, chemin_original,
             fournisseur, numero_facture, date, montant_ht, tva, montant_ttc,
             conf_fournisseur, conf_numero, conf_date, conf_ht, conf_tva, conf_ttc,
             src_fournisseur, src_numero, src_date, src_ht, src_tva, src_ttc,
             ctrl_arithmetique, ctrl_date_valide, ctrl_doublon,
             conf_ocr, nb_divergences
         ) VALUES (
-            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
@@ -125,6 +145,7 @@ def inserer_facture(conn: sqlite3.Connection, facture: dict) -> int:
         )
     """, (
         facture.get("fichier"), facture.get("empreinte"), facture.get("statut"),
+        facture.get("source", "interface"),
         facture.get("chemin_original"),
         v("fournisseur"), v("numero_facture"), v("date"),
         v("montant_ht"), v("tva"), v("montant_ttc"),
@@ -169,6 +190,56 @@ def obtenir_facture(conn: sqlite3.Connection, id_facture: int) -> Optional[dict]
         "SELECT * FROM factures WHERE id = ?", (id_facture,)
     ).fetchone()
     return dict(row) if row else None
+
+
+def enregistrer_notification_email(conn: sqlite3.Connection, notification: dict) -> int:
+    """Enregistre le bilan d'un courriel traité par n8n."""
+    fichiers = notification["fichiers"]
+    nb_fichiers_traites = sum(
+        fichier.get("id_facture") is not None for fichier in fichiers
+    )
+    curseur = conn.execute(
+        """
+        INSERT INTO notifications_email (
+            cle_email, sujet, nb_fichiers_recus, nb_fichiers_traites, fichiers_json
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            notification["cle_email"],
+            notification["sujet"],
+            notification["nb_fichiers_recus"],
+            nb_fichiers_traites,
+            json.dumps(fichiers, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    return curseur.lastrowid
+
+
+def lister_notifications_email(conn: sqlite3.Connection, limite: int = 5) -> list[dict]:
+    """Retourne les notifications e-mail les plus récentes."""
+    lignes = conn.execute(
+        """
+        SELECT id, cle_email, sujet, nb_fichiers_recus, nb_fichiers_traites,
+               fichiers_json, cree_le
+        FROM notifications_email
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limite,),
+    ).fetchall()
+    return [
+        {
+            "id": ligne["id"],
+            "cle_email": ligne["cle_email"],
+            "sujet": ligne["sujet"],
+            "nb_fichiers_recus": ligne["nb_fichiers_recus"],
+            "nb_fichiers_traites": ligne["nb_fichiers_traites"],
+            "fichiers": json.loads(ligne["fichiers_json"]),
+            "cree_le": ligne["cree_le"],
+        }
+        for ligne in lignes
+    ]
 
 
 # ---------------------------------------------------------------------------
