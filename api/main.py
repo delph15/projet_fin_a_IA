@@ -93,7 +93,7 @@ def assembler_facture(nom_fichier: str, chemin_original: str, champs: dict, resu
 # ---------------------------------------------------------------------------
 
 @app.post("/factures/", status_code=201)
-async def soumettre_facture(
+def soumettre_facture(
     fichier: UploadFile = File(...),
     source: str = Form(default="interface"),
 ):
